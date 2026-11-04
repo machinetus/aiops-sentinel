@@ -24,3 +24,5 @@ lark-oapi>=1.4
 # --- 测试（implement.md 阶段 1 起） ---
 pytest>=8.0
 pytest-timeout>=2.3
+# 新版 starlette 的 TestClient 运行时依赖（2026 生态；test_router_api 需要）
+httpx2>=2.0
