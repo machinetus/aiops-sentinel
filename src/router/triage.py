@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -54,7 +55,9 @@ def _recent_incident_count(db: Database, subject: str, classification: str) -> i
 
 
 def triage_new_alert(db: Database, *, alert_id: int, source: str, severity: str,
-                     subject: str, error_class: str | None) -> dict:
+                     subject: str, error_class: str | None,
+                     message: str | None = None,
+                     diag_enabled: bool = False) -> dict:
     """对一条新告警分诊并落库（调用方须持有 db.lock）。
 
     返回：{"incident_id", "classification", "task_id"?, "escalated", "reason"?}
@@ -90,7 +93,38 @@ def triage_new_alert(db: Database, *, alert_id: int, source: str, severity: str,
         return {"incident_id": incident_id, "classification": classification,
                 "escalated": True, "reason": reason}
 
-    # 3) 正常分诊：建 incident（处置类进 acting）
+    # 3) app_error：diag 开启 → 派发诊断任务（incident=diagnosing）
+    if classification == "app_error" and diag_enabled:
+        evidence: list = []
+        alert_row = db.query_one("SELECT payload_json FROM alert WHERE id = ?",
+                                 (alert_id,))
+        try:
+            evidence = (json.loads(alert_row["payload_json"] or "{}").get("evidence")
+                        or []) if alert_row else []
+        except (json.JSONDecodeError, TypeError):
+            evidence = []
+        cur = db.execute(
+            "INSERT INTO incident (fingerprint, alert_id, title, classification, state, "
+            "severity, created_at, updated_at) VALUES (?, ?, ?, ?, 'diagnosing', ?, ?, ?)",
+            (None, alert_id, f"{subject} · {classification}", classification,
+             severity, now, now),
+        )
+        incident_id = int(cur.lastrowid or 0)
+        diag_payload = {
+            "alert_id": alert_id, "incident_id": incident_id, "subject": subject,
+            "error_class": error_class, "message": message, "evidence": evidence,
+        }
+        cur = db.execute(
+            "INSERT INTO task (incident_id, type, status, payload_json, created_at, "
+            "updated_at) VALUES (?, 'diag', 'queued', ?, ?, ?)",
+            (incident_id, json.dumps(diag_payload, ensure_ascii=False), now, now),
+        )
+        task_id = int(cur.lastrowid or 0)
+        logger.info("incident=%s 分诊=app_error 派发诊断 task=%s", incident_id, task_id)
+        return {"incident_id": incident_id, "classification": classification,
+                "task_id": task_id, "escalated": False}
+
+    # 4) 正常分诊：建 incident（处置类进 acting）
     incident_state = "acting" if action else "open"
     cur = db.execute(
         "INSERT INTO incident (fingerprint, alert_id, title, classification, state, "

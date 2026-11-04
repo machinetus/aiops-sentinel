@@ -29,7 +29,8 @@ from ..common.config import AppConfig, load_config
 from ..common.db import Database, get_db, utc_now_iso
 from ..common.fingerprint import make_fingerprint
 from ..common.log import setup_logging
-from ..feishu.cards import alert_card, escalation_card, result_card
+from ..feishu.cards import (alert_card, diag_card, escalation_card,
+                            result_card)
 from ..feishu.sender import get_sender
 from . import triage
 from .schemas import (
@@ -154,7 +155,8 @@ async def ingest_alert(alert_in: AlertIn, request: Request) -> AlertOut:
         triage_info = triage.triage_new_alert(
             db, alert_id=alert_id, source=alert_in.source,
             severity=alert_in.severity, subject=alert_in.subject,
-            error_class=alert_in.error_class)
+            error_class=alert_in.error_class, message=alert_in.message,
+            diag_enabled=config.worker.diag_enabled)
     if triage_info.get("escalated") and sender is not None:
         asyncio.create_task(sender.send(escalation_card(
             incident_id=triage_info["incident_id"], subject=alert_in.subject,
@@ -257,10 +259,15 @@ async def submit_task_result(task_id: int, body: TaskResultIn, request: Request)
         )
         incident_id = int(row["incident_id"])
         task_type = row["type"]
-        outcome = triage.apply_task_result(
-            db, incident_id=incident_id, task_type=task_type,
-            status=body.status, result=body.result)
         subject = triage.incident_subject(db, incident_id)
+        if task_type == "diag" and body.status == "succeeded" \
+                and not body.result.get("denied"):
+            # 诊断成功：只出根因卡片，incident 保持 diagnosing（修复流程在阶段 5）
+            outcome = {"state": "diagnosed"}
+        else:
+            outcome = triage.apply_task_result(
+                db, incident_id=incident_id, task_type=task_type,
+                status=body.status, result=body.result)
 
     denied = bool(body.result.get("denied"))
     detail: dict = {"worker_id": body.worker_id, "task_type": task_type}
@@ -274,7 +281,15 @@ async def submit_task_result(task_id: int, body: TaskResultIn, request: Request)
 
     sender = getattr(request.app.state, "feishu", None)
     if sender is not None:
-        if outcome["state"] == "resolved":
+        if outcome["state"] == "diagnosed":
+            card = diag_card(
+                incident_id=incident_id,
+                root_cause=str(body.result.get("root_cause") or "（未给出）"),
+                suspect_files=body.result.get("suspect_files") or [],
+                evidence=body.result.get("evidence") or [],
+                confidence=float(body.result.get("confidence") or 0),
+                need_code_fix=bool(body.result.get("need_code_fix")))
+        elif outcome["state"] == "resolved":
             verify = body.result.get("verify") or {}
             card = result_card(
                 incident_id=incident_id, subject=subject,
