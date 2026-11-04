@@ -49,7 +49,11 @@ class ProcessProbeState:
 
 
 class HttpProbeState:
-    """HTTP 探针：连续 N 次失败才告警（防抖），连续 2 次成功才恢复。"""
+    """HTTP 探针：连续 N 次失败才告警（防抖），连续 2 次成功才恢复。
+
+    恢复事件的 error_class 必须与告警时一致（指纹才能对上，design §3.3），
+    因此 active 期间记住告警使用的 error_class。
+    """
 
     def __init__(self, subject: str, consecutive_failures: int = 3) -> None:
         self.subject = subject
@@ -57,6 +61,7 @@ class HttpProbeState:
         self._fails = 0
         self._oks = 0
         self._active = False
+        self._active_error_class: str | None = None
 
     def evaluate(self, ok: bool, status: int | None = None, err: str = "") -> ProbeResult:
         if ok:
@@ -64,7 +69,9 @@ class HttpProbeState:
             self._oks += 1
             if self._active and self._oks >= 2:
                 self._active = False
-                return ProbeResult("recover", error_class="http_5xx",
+                recover_class = self._active_error_class or "http_5xx"
+                self._active_error_class = None
+                return ProbeResult("recover", error_class=recover_class,
                                    message=f"{self.subject} HTTP 恢复")
             return ProbeResult("none", error_class="http_5xx")
         self._oks = 0
@@ -72,6 +79,7 @@ class HttpProbeState:
         error_class = "http_5xx" if status and status >= 500 else "http_unreachable"
         if not self._active and self._fails >= self.consecutive_failures:
             self._active = True
+            self._active_error_class = error_class
             return ProbeResult("alert", error_class=error_class,
                                message=f"{self.subject} HTTP 连续 {self._fails} 次失败"
                                        f"（status={status} {err}）")
@@ -79,7 +87,10 @@ class HttpProbeState:
 
 
 class LogProbeState:
-    """日志探针：错误行速率超阈值告警；error_class 从命中行提取异常类。"""
+    """日志探针：错误行速率超阈值告警；error_class 从命中行提取异常类。
+
+    同 HttpProbeState：恢复事件沿用告警时的 error_class（指纹一致性）。
+    """
 
     def __init__(self, subject: str, error_pattern: str, rate_per_min: float,
                  interval_seconds: int) -> None:
@@ -88,6 +99,7 @@ class LogProbeState:
         self.rate_per_min = rate_per_min
         self.interval = max(interval_seconds, 1)
         self._active = False
+        self._active_error_class: str | None = None
 
     def evaluate(self, new_error_lines: list[str]) -> ProbeResult:
         rate = len(new_error_lines) * (60.0 / self.interval)
@@ -99,13 +111,16 @@ class LogProbeState:
                 break
         if rate >= self.rate_per_min and not self._active:
             self._active = True
+            self._active_error_class = error_class or "log_error_rate"
             return ProbeResult(
-                "alert", error_class=error_class or "log_error_rate",
+                "alert", error_class=self._active_error_class,
                 message=f"{self.subject} 日志错误率 {rate:.0f}/min ≥ 阈值 {self.rate_per_min}/min",
                 evidence=new_error_lines[-5:], value=rate)
         if rate < self.rate_per_min and self._active:
             self._active = False
-            return ProbeResult("recover", error_class=error_class or "log_error_rate",
+            recover_class = self._active_error_class or "log_error_rate"
+            self._active_error_class = None
+            return ProbeResult("recover", error_class=recover_class,
                                message=f"{self.subject} 日志错误率回落 {rate:.0f}/min")
         return ProbeResult("none", error_class=error_class)
 
