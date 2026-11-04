@@ -1,9 +1,43 @@
-"""飞书发送器与卡片单测：加签算法 / 降级逻辑 / 卡片结构。"""
+"""飞书发送器与卡片单测：加签算法 / 时间戳一致性 / 降级逻辑 / 卡片结构。"""
 
 from __future__ import annotations
 
+import asyncio
+
 from src.feishu.cards import alert_card, pr_confirm_card, timeline_card
-from src.feishu.sender import get_sender, sign
+from src.feishu.sender import FeishuSender, get_sender, sign
+
+
+class _FakeResp:
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    def json(self) -> dict:
+        return self._data
+
+
+class _FakeClient:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def post(self, url: str, json: dict) -> _FakeResp:  # noqa: A002
+        self.calls.append(json)
+        return _FakeResp({"code": 0})
+
+
+def test_send_uses_same_timestamp_for_sign(monkeypatch):
+    """回归（2026-11-04 真机踩坑）：timestamp 与 sign 必须同源 ts，
+    两次独立 time.time() 跨秒会造成签名不匹配（飞书 code=19021）。"""
+    import time as time_mod
+
+    monkeypatch.setattr(time_mod, "time", lambda: 1700000000.9)
+    sender = FeishuSender("http://example.invalid/hook", "my-secret")
+    fake = _FakeClient()
+    sender._client = fake  # type: ignore[assignment]
+    assert asyncio.run(sender.send({"elements": []})) is True
+    payload = fake.calls[0]
+    assert payload["timestamp"] == "1700000000"
+    assert payload["sign"] == sign("my-secret", 1700000000)
 
 
 def test_sign_is_stable_base64():

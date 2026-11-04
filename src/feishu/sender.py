@@ -46,11 +46,17 @@ class FeishuSender:
         return cls(url, secret)
 
     async def send(self, card: dict, *, retries: int = 1) -> bool:
-        """发送交互卡片；payload 按「加签」模式组装。返回是否成功。"""
+        """发送交互卡片；payload 按「加签」模式组装。返回是否成功。
+
+        注意（2026-11-04 真机踩坑）：timestamp 与 sign 必须用**同一个** ts 计算——
+        两次独立 time.time() 在跨秒瞬间会产生不匹配签名，飞书报
+        "sign match fail or timestamp is not within one hour"。
+        """
         for attempt in range(retries + 1):
+            ts = int(time.time())
             payload = {
-                "timestamp": str(int(time.time())),
-                "sign": sign(self.secret, int(time.time())),
+                "timestamp": str(ts),
+                "sign": sign(self.secret, ts),
                 "msg_type": "interactive",
                 "card": card,
             }
