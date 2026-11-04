@@ -55,3 +55,35 @@ def test_traffic_probe_threshold():
     assert r.verdict == "alert" and r.value == 80
     assert state.evaluate(80).verdict == "none"              # 不重复
     assert state.evaluate(10).verdict == "recover"
+
+
+def test_http_probe_recover_uses_alert_error_class():
+    """回归（2026-11-04 真机发现）：告警 http_unreachable / 恢复 http_5xx
+    → 指纹不一致，firing 告警永远无法恢复关闭。"""
+    from src.common.fingerprint import make_fingerprint
+
+    state = HttpProbeState("demo-app")
+    alert = None
+    for _ in range(3):
+        alert = state.evaluate(False, None, "ConnectError")
+    assert alert.verdict == "alert" and alert.error_class == "http_unreachable"
+    recover = state.evaluate(True, 200)
+    recover2 = state.evaluate(True, 200)
+    assert recover2.verdict == "recover"
+    # 恢复指纹必须等于告警指纹
+    assert make_fingerprint("probe:http", "demo-app", recover2.error_class) == \
+        make_fingerprint("probe:http", "demo-app", alert.error_class)
+
+
+def test_log_probe_recover_uses_alert_error_class():
+    """回归：日志告警提取到 ValueError 时，恢复也必须用 ValueError。"""
+    from src.common.fingerprint import make_fingerprint
+
+    state = LogProbeState("demo-app", "ERROR|Traceback", rate_per_min=5,
+                          interval_seconds=30)
+    alert = state.evaluate(['{"level":"ERROR","msg":"ValueError: bad"}'] * 3)
+    assert alert.error_class == "ValueError"
+    recover = state.evaluate([])
+    assert recover.verdict == "recover"
+    assert make_fingerprint("probe:log", "demo-app", recover.error_class) == \
+        make_fingerprint("probe:log", "demo-app", alert.error_class)
