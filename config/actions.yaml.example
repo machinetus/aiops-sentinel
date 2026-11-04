@@ -30,3 +30,14 @@ actions:
     method: POST
     url: "http://127.0.0.1:9101/admin/limits"
     body: {action: rate_limit, qps: 50, duration_min: 5}
+
+  # 合并后部署（阶段 5）：部署克隆 git pull + 重启，两步全部逐条校验
+  # 触发：Router 轮询检测到 PR merged → 建 deploy 任务（payload.action=deploy_demo_app）
+  deploy_demo_app:
+    type: steps
+    steps:
+      - {type: exec, command: ["/usr/bin/git", "-C", "/opt/aiops/deploy", "pull", "--ff-only"], timeout_seconds: 60}
+      - {type: exec, command: ["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "demo-app.service"]}
+    verify: {type: http, url: "http://127.0.0.1:18000/health", expect: 200}
+    verify_attempts: 3
+    verify_interval: 10

@@ -103,6 +103,10 @@ if pip download -r "$SRC_DIR/requirements.txt" -d /opt/aiops/sandbox/wheelhouse 
 else
   echo "[bootstrap] 警告：wheelhouse 下载失败（无外网？），阶段 5 沙箱需联网或手动补"
 fi
+# 沙箱 editable 安装（PEP517）需要构建件，一并离线缓存
+pip download setuptools wheel -d /opt/aiops/sandbox/wheelhouse -q 2>/dev/null \
+  && echo "[bootstrap] wheelhouse 构建件就绪" \
+  || echo "[bootstrap] 警告：setuptools/wheel 下载失败，阶段 5 沙箱可能需要手动补"
 chown -R aiops:aiops /opt/aiops/sandbox
 
 # ---------- 5. 配置与密钥（design §9.2；密钥 0600 不入库） ----------

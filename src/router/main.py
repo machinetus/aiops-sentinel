@@ -19,9 +19,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 
 from ..common.audit import log_action
@@ -30,7 +32,7 @@ from ..common.db import Database, get_db, utc_now_iso
 from ..common.fingerprint import make_fingerprint
 from ..common.log import setup_logging
 from ..feishu.cards import (alert_card, diag_card, escalation_card,
-                            result_card)
+                            pr_review_card, result_card)
 from ..feishu.sender import get_sender
 from . import triage
 from .schemas import (
@@ -60,11 +62,13 @@ async def lifespan(_: FastAPI):
     db.connect()
     db.init_schema()
     app.state.feishu = get_sender(config.feishu.enabled)
+    watch_task = asyncio.create_task(_pr_watch_loop())  # 阶段 5：PR 合并轮询
     logger.info("router 启动完成 db=%s lease=%ss dedupe=%ss feishu=%s",
                 db.path, config.router.lease_seconds,
                 config.alert.dedupe_window_seconds,
                 "on" if app.state.feishu else "off")
     yield
+    watch_task.cancel()
     db.close()
     logger.info("router 已停止")
 
@@ -260,14 +264,64 @@ async def submit_task_result(task_id: int, body: TaskResultIn, request: Request)
         incident_id = int(row["incident_id"])
         task_type = row["type"]
         subject = triage.incident_subject(db, incident_id)
-        if task_type == "diag" and body.status == "succeeded" \
-                and not body.result.get("denied"):
-            # 诊断成功：只出根因卡片，incident 保持 diagnosing（修复流程在阶段 5）
+        task_payload = json.loads(row["payload_json"] or "{}")
+        action = task_payload.get("action")
+        denied = bool(body.result.get("denied"))
+
+        if task_type == "diag" and body.status == "succeeded" and not denied:
+            # 诊断成功：出根因卡；需要改码 + fix 开启 → 派发修复任务（单飞）
             outcome = {"state": "diagnosed"}
+            if config.worker.fix_enabled and body.result.get("need_code_fix"):
+                _dispatch_fix_task(db, incident_id=incident_id,
+                                   diag_payload=task_payload,
+                                   diag_result=body.result, subject=subject)
+        elif task_type == "fix" and body.status == "succeeded" and not denied:
+            # 修复成功：登记 patch_proposal → awaiting_human（等人工 GitHub 合并）
+            now2 = utc_now_iso()
+            db.execute(
+                "INSERT INTO patch_proposal (incident_id, branch, pr_number, pr_url, "
+                "root_cause, diff_stat, test_summary, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'awaiting_confirm', ?, ?)",
+                (incident_id, body.result.get("branch"),
+                 body.result.get("pr_number"), body.result.get("pr_url"),
+                 body.result.get("root_cause"), body.result.get("diff_stat"),
+                 body.result.get("test_summary"), now2, now2))
+            db.execute(
+                "UPDATE incident SET state = 'awaiting_human', updated_at = ? WHERE id = ?",
+                (now2, incident_id))
+            outcome = {"state": "awaiting_human"}
+        elif task_type == "ops" and action == "deploy_demo_app" \
+                and body.status == "succeeded" and not denied:
+            # 合并部署成功：锁外做复测重放，再迁移 incident 终态
+            outcome = {"state": "deploy_pending_replay"}
         else:
             outcome = triage.apply_task_result(
                 db, incident_id=incident_id, task_type=task_type,
                 status=body.status, result=body.result)
+
+    # 阶段 5：合并部署后复测（重放触发样本，期望非 5xx）
+    if outcome["state"] == "deploy_pending_replay":
+        replay_ok = await _replay_sample(task_payload.get("sample"))
+        with db.lock:
+            now3 = utc_now_iso()
+            if replay_ok:
+                db.execute(
+                    "UPDATE patch_proposal SET status = 'merged', updated_at = ? "
+                    "WHERE incident_id = ? AND status IN ('awaiting_confirm', 'deploying')",
+                    (now3, incident_id))
+                db.execute(
+                    "UPDATE incident SET state = 'resolved', resolved_at = ?, "
+                    "updated_at = ? WHERE id = ?", (now3, now3, incident_id))
+                outcome = {"state": "resolved"}
+            else:
+                db.execute(
+                    "UPDATE patch_proposal SET status = 'deploy_failed', updated_at = ? "
+                    "WHERE incident_id = ?", (now3, incident_id))
+                db.execute(
+                    "UPDATE incident SET state = 'escalated', "
+                    "escalation_reason = '合并部署后复测失败', updated_at = ? WHERE id = ?",
+                    (now3, incident_id))
+                outcome = {"state": "escalated", "reason": "合并部署后复测失败"}
 
     denied = bool(body.result.get("denied"))
     detail: dict = {"worker_id": body.worker_id, "task_type": task_type}
@@ -289,6 +343,15 @@ async def submit_task_result(task_id: int, body: TaskResultIn, request: Request)
                 evidence=body.result.get("evidence") or [],
                 confidence=float(body.result.get("confidence") or 0),
                 need_code_fix=bool(body.result.get("need_code_fix")))
+        elif outcome["state"] == "awaiting_human":
+            card = pr_review_card(
+                incident_id=incident_id,
+                pr_number=int(body.result.get("pr_number") or 0),
+                pr_url=str(body.result.get("pr_url") or ""),
+                root_cause=str(body.result.get("root_cause") or ""),
+                diff_stat=str(body.result.get("diff_stat") or ""),
+                test_summary=str(body.result.get("test_summary") or ""),
+                branch=str(body.result.get("branch") or ""))
         elif outcome["state"] == "resolved":
             verify = body.result.get("verify") or {}
             card = result_card(
@@ -323,6 +386,156 @@ def _within_window(last_seen_at: str, now_iso: str, window_seconds: int) -> bool
         return (now - last).total_seconds() <= window_seconds
     except ValueError:
         return False  # 时间戳异常 → 按新告警处理，不吞告警
+
+
+# ---------------------------------------------------------------------------
+# 阶段 5：修复闭环辅助（diag → fix → PR → 合并轮询 → deploy → 复测）
+# ---------------------------------------------------------------------------
+def _extract_sample(evidence: list[str]) -> dict | None:
+    """从证据行（JSON 日志）提取触发样本，修复合并后复测重放用。"""
+    for line in evidence or []:
+        try:
+            obj = json.loads(line)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(obj, dict) and isinstance(obj.get("body"), dict):
+            return {"method": "POST", "path": "/api/orders", "json": obj["body"]}
+    return None
+
+
+def _pick_sample(db: Database, incident_id: int) -> dict | None:
+    """incident → alert.payload_json.evidence → 触发样本。"""
+    row = db.query_one(
+        "SELECT a.payload_json AS p FROM incident i JOIN alert a ON i.alert_id = a.id "
+        "WHERE i.id = ?", (incident_id,))
+    if not row:
+        return None
+    try:
+        evidence = json.loads(row["p"] or "{}").get("evidence") or []
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return _extract_sample(evidence)
+
+
+def _dispatch_fix_task(db: Database, *, incident_id: int, diag_payload: dict,
+                       diag_result: dict, subject: str) -> int | None:
+    """diag 成功且需要改码 → 单飞派发 fix 任务（调用方持有 db.lock）。"""
+    existing = db.query_one(
+        "SELECT id FROM task WHERE incident_id = ? AND type = 'fix' "
+        "AND status IN ('queued', 'running')", (incident_id,))
+    if existing:
+        logger.info("incident=%s 已有在途 fix 任务（单飞跳过）", incident_id)
+        return None
+    payload = {
+        "incident_id": incident_id,
+        "subject": subject,
+        "error_class": diag_payload.get("error_class"),
+        "root_cause": diag_result.get("root_cause"),
+        "suspect_files": diag_result.get("suspect_files") or [],
+        "sample": _extract_sample(diag_payload.get("evidence") or []),
+    }
+    now = utc_now_iso()
+    cur = db.execute(
+        "INSERT INTO task (incident_id, type, status, payload_json, created_at, updated_at) "
+        "VALUES (?, 'fix', 'queued', ?, ?, ?)",
+        (incident_id, json.dumps(payload, ensure_ascii=False), now, now))
+    db.execute("UPDATE incident SET state = 'acting', updated_at = ? WHERE id = ?",
+               (now, incident_id))
+    task_id = int(cur.lastrowid or 0)
+    logger.info("incident=%s 派发修复 task=%s", incident_id, task_id)
+    return task_id
+
+
+async def _replay_sample(sample: dict | None) -> bool:
+    """合并后复测：重放触发样本，期望非 5xx（修复后应为 400 校验拒绝）。"""
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            if not sample:
+                resp = await client.get("http://127.0.0.1:18000/health")
+                return resp.status_code == 200
+            url = f"http://127.0.0.1:18000{sample.get('path', '/api/orders')}"
+            resp = await client.request(sample.get("method", "POST"), url,
+                                        json=sample.get("json"))
+        ok = resp.status_code < 500
+        logger.info("复测重放 %s → HTTP %s（%s）", url, resp.status_code,
+                    "通过" if ok else "失败")
+        return ok
+    except Exception:  # noqa: BLE001
+        logger.exception("复测重放异常")
+        return False
+
+
+async def _pr_watch_once() -> None:
+    """轮询 awaiting_confirm 的 PR：merged → 派 deploy 任务；closed → 升级转人工。"""
+    db = get_db()
+    rows = db.query_all(
+        "SELECT * FROM patch_proposal WHERE status = 'awaiting_confirm'")
+    if not rows:
+        return
+    token = os.environ.get("GH_TOKEN", "")
+    repo = os.environ.get("GITHUB_REPO", "machinetus/aiops-sentinel")
+    for row in rows:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(
+                    f"https://api.github.com/repos/{repo}/pulls/{row['pr_number']}",
+                    headers={"Authorization": f"Bearer {token}",
+                             "Accept": "application/vnd.github+json"})
+            if resp.status_code != 200:
+                logger.warning("PR #%s 查询失败 HTTP %s", row["pr_number"],
+                               resp.status_code)
+                continue
+            pr = resp.json()
+            now = utc_now_iso()
+            if pr.get("merged"):
+                with db.lock:
+                    exists = db.query_one(
+                        "SELECT id FROM task WHERE incident_id = ? AND type = 'ops' "
+                        "AND status IN ('queued', 'running') "
+                        "AND payload_json LIKE '%deploy_demo_app%'",
+                        (row["incident_id"],))
+                    if exists:
+                        continue
+                    sample = _pick_sample(db, row["incident_id"])
+                    db.execute(
+                        "INSERT INTO task (incident_id, type, status, payload_json, "
+                        "created_at, updated_at) VALUES (?, 'ops', 'queued', ?, ?, ?)",
+                        (row["incident_id"],
+                         json.dumps({"action": "deploy_demo_app",
+                                     "params": {}, "patch_id": row["id"],
+                                     "sample": sample}, ensure_ascii=False),
+                         now, now))
+                    db.execute(
+                        "UPDATE patch_proposal SET status = 'deploying', updated_at = ? "
+                        "WHERE id = ?", (now, row["id"]))
+                logger.info("PR #%s 已合并 → 派发 deploy 任务", row["pr_number"])
+            elif pr.get("state") == "closed":
+                with db.lock:
+                    db.execute(
+                        "UPDATE patch_proposal SET status = 'rejected', updated_at = ? "
+                        "WHERE id = ?", (now, row["id"]))
+                    db.execute(
+                        "UPDATE incident SET state = 'escalated', "
+                        "escalation_reason = 'PR 被关闭/拒绝', updated_at = ? "
+                        "WHERE id = ?", (now, row["incident_id"]))
+                logger.warning("PR #%s 被关闭 → incident=%s 升级转人工",
+                               row["pr_number"], row["incident_id"])
+                sender = getattr(app.state, "feishu", None)
+                if sender is not None:
+                    asyncio.create_task(sender.send(escalation_card(
+                        incident_id=int(row["incident_id"]), subject="demo-app",
+                        reason="修复 PR 被拒绝/关闭", attempted="人工拒绝")))
+        except Exception:  # noqa: BLE001 —— 单条失败不影响其他 PR
+            logger.exception("PR 轮询异常 #%s", row["pr_number"])
+
+
+async def _pr_watch_loop() -> None:
+    while True:
+        try:
+            await _pr_watch_once()
+        except Exception:  # noqa: BLE001
+            logger.exception("PR 轮询循环异常")
+        await asyncio.sleep(30)
 
 
 if __name__ == "__main__":  # python -m src.router.main（systemd 入口）
