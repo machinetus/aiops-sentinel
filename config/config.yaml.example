@@ -1,0 +1,36 @@
+# ============================================================================
+# /etc/aiops/config.yaml —— Sentinel 全局配置（design §9.2）
+# 由 bootstrap.sh 从 config/config.yaml.example 复制；改后需 restart 对应服务。
+# 密钥一律不放本文件，统一放 /etc/aiops/secrets.env（0600，不入库）。
+# ============================================================================
+
+router:
+  # 安全边界（design §8）：内部 API 只绑本机回环，绝不可改成 0.0.0.0
+  host: "127.0.0.1"
+  port: 8081
+  # 任务认领租约（design §4.3）：worker 认领后必须在租约内回传结果，
+  # 租约过期由阶段 3 的状态机负责重派一次（claim_max_attempts）
+  lease_seconds: 300
+  claim_max_attempts: 2
+
+alert:
+  # 告警指纹降噪窗口（design §3.2）：同指纹 5 分钟内只计数、不发新告警
+  dedupe_window_seconds: 300
+
+# LLM（阶段 4 启用；OpenAI 兼容，可换 GLM / DeepSeek / 本地模型）
+llm:
+  enabled: false
+  base_url: ""        # 例：https://open.bigmodel.cn/api/paas/v4
+  model: ""           # 例：glm-4-flash
+  timeout_seconds: 60
+  temperature: 0.1
+
+# Worker 开关（阶段 3/5 启用；全关 = 告警只通知不处置，是最快的安全回滚位）
+worker:
+  ops_enabled: false
+  diag_enabled: false
+  fix_enabled: false
+
+# 飞书（阶段 2 启用；凭据从 secrets.env 环境变量读取，此处只放开关）
+feishu:
+  enabled: false

@@ -1,0 +1,16 @@
+# ============================================================================
+# Sentinel AIOps Agent 工程配置
+# - pytest：pythonpath="." 使 tests/ 可直接 `import src.*`
+# - pytest-timeout：单用例 60s 硬超时，防挂死（design §11）
+# ============================================================================
+[project]
+name = "sentinel-aiops"
+version = "0.1.0"
+description = "Sentinel AIOps Agent：Router-Worker 架构的智能运维原型"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+timeout = 60
+addopts = "-q"

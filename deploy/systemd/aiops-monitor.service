@@ -1,0 +1,27 @@
+# ============================================================================
+# Sentinel Monitor（感知面：四类探针）systemd 单元
+# 代码在【阶段 2】落地（src/monitor/main.py）；bootstrap.sh 只安装不启用。
+# 阶段 2 完成后手动启用：
+#   sudo systemctl enable --now aiops-monitor
+# ============================================================================
+[Unit]
+Description=Sentinel AIOps Monitor (感知面：进程/HTTP/日志/流量探针)
+After=network-online.target
+Wants=network-online.target
+# 依赖 Router：告警经 Router 内部 API 上报（design §1.2）
+Requires=aiops-router.service
+
+[Service]
+Type=simple
+User=aiops
+Group=aiops
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/aiops/secrets.env
+WorkingDirectory=/opt/aiops/runtime
+# 探针阈值/周期读取 /etc/aiops/probes.yaml（design §3.1）
+ExecStart=/opt/aiops/venv/bin/python -m src.monitor.main
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

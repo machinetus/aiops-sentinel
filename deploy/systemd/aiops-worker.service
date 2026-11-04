@@ -1,0 +1,28 @@
+# ============================================================================
+# Sentinel Worker（执行面：Ops / Diag / Fix 三角色）systemd 单元
+# 代码在【阶段 3/5】落地（src/workers/main.py）；bootstrap.sh 只安装不启用。
+# 阶段 3 完成后手动启用：
+#   sudo systemctl enable --now aiops-worker
+# 安全提示：本单元可执行 sudoers 白名单内的提权命令（restart demo-app），
+# 因此 exec 型动作只允许来自 /etc/aiops/actions.yaml 的白名单（design §5.1）。
+# ============================================================================
+[Unit]
+Description=Sentinel AIOps Worker (执行面：自愈/诊断/修复)
+After=network-online.target
+Wants=network-online.target
+Requires=aiops-router.service
+
+[Service]
+Type=simple
+User=aiops
+Group=aiops
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/aiops/secrets.env
+WorkingDirectory=/opt/aiops/runtime
+# 动作白名单 / 复检参数读取 /etc/aiops/actions.yaml（design §5.1）
+ExecStart=/opt/aiops/venv/bin/python -m src.workers.main
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

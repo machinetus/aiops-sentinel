@@ -1,0 +1,23 @@
+# ============================================================================
+# /etc/sudoers.d/aiops-sentinel —— Sentinel 白名单 sudo 授权（design §8）
+#
+# 安装方式（bootstrap.sh 已自动完成）：
+#   sudo visudo -cf deploy/sudoers/aiops-sentinel      # 先校验，必须 parsed OK
+#   sudo install -o root -g root -m 0440 \
+#        deploy/sudoers/aiops-sentinel /etc/sudoers.d/aiops-sentinel
+#
+# 语法说明：aiops ALL=(root) NOPASSWD: <命令>
+#   - 命令必须是绝对路径 + 固定参数的「逐字精确匹配」，严禁通配符（*）
+#   - aiops 用户只能免密执行下面这一条写操作，其余一切 sudo 请求被拒绝并留审计
+#
+# 为什么只有一条？
+#   - restart 是唯一的写操作，必须提权；
+#   - systemctl is-active / status 等查询类命令是只读的，普通用户本来就能执行，
+#     无需也不应放进 sudoers（白名单越小越安全）。
+#
+# 安全验证（阶段 7 负测试）：
+#   sudo -u aiops sudo systemctl restart demo-app.service   # 应成功
+#   sudo -u aiops sudo rm -rf /tmp/x                        # 应被拒绝
+# ============================================================================
+
+aiops ALL=(root) NOPASSWD: /usr/bin/systemctl restart demo-app.service

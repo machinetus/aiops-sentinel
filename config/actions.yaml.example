@@ -1,0 +1,32 @@
+# ============================================================================
+# /etc/aiops/actions.yaml —— OpsWorker 白名单动作（design §5.1）
+# 三重门之一（design §5.2 / §8）：此处定义的动作才可被 Worker 执行；
+# sudoers（deploy/sudoers/aiops-sentinel）+ 运行时校验是另外两道门。
+# 阶段 3 生效；本文件先随阶段 0 落位。改后 restart aiops-worker。
+# ============================================================================
+
+actions:
+  # 自愈动作：重启 demo-app（唯一需要 sudo 的写操作，sudoers 逐字精确授权）
+  restart_demo_app:
+    type: exec
+    command: ["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "demo-app.service"]
+    # 复检（design D7）：动作后必须自证恢复；3 次 × 10s 全过才算 succeeded
+    verify: {type: http, url: "http://127.0.0.1:8000/health", expect: 200}
+    verify_attempts: 3
+    verify_interval: 10
+    # 每 incident 最多重启 3 次，超限升级转人工（design §5.1）
+    max_per_incident: 3
+
+  # 流量自愈：封禁 IP（走 demo-app 仅绑 127.0.0.1 的 admin API，design §1.2）
+  block_ip:
+    type: http
+    method: POST
+    url: "http://127.0.0.1:9101/admin/limits"
+    body: {action: block, ip: "{ip}", duration_min: 10}
+
+  # 流量自愈：开启限流，到期由 demo-app 自动解除（design §10.3）
+  set_rate_limit:
+    type: http
+    method: POST
+    url: "http://127.0.0.1:9101/admin/limits"
+    body: {action: rate_limit, qps: 50, duration_min: 5}

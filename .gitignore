@@ -1,0 +1,26 @@
+# ============================================================================
+# Sentinel .gitignore（铁律：密钥与运行期数据永不入库）
+# ============================================================================
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# 运行期数据（VM 上由 bootstrap/服务生成）
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+*.log
+audit*.jsonl
+
+# 密钥与本地环境
+secrets.env
+.env
+
+# 沙箱/工作区产物
+sandbox/
+.sbx-venv/

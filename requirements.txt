@@ -1,0 +1,26 @@
+# ============================================================================
+# Sentinel AIOps Agent 运行依赖（design §「依赖与关联」/ §9.4）
+# 安装：/opt/aiops/venv/bin/pip install -r requirements.txt
+# 离线缓存：bootstrap.sh 会执行 pip download 到 /opt/aiops/sandbox/wheelhouse
+# ============================================================================
+
+# --- Router / demo-app Web 框架（阶段 1 起） ---
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+
+# --- 配置与序列化 ---
+PyYAML>=6.0.1
+
+# --- 感知面探针（阶段 2 起） ---
+psutil>=5.9
+
+# --- HTTP 客户端（探针 / 白名单 HTTP 动作 / 复检 / TestClient） ---
+httpx>=0.27
+
+# --- 飞书集成（阶段 2 起：出站卡片 + 入站长连接） ---
+lark-oapi>=1.4
+
+# --- 测试（implement.md 阶段 1 起） ---
+pytest>=8.0
+pytest-timeout>=2.3

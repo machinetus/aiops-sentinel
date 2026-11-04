@@ -1,0 +1,34 @@
+# ============================================================================
+# /etc/aiops/probes.yaml —— 感知面探针配置（design §3.1）
+# 由 bootstrap.sh 从 config/probes.yaml.example 复制；改后 restart aiops-monitor。
+# 阶段 2 生效；本文件先随阶段 0 落位。
+# ============================================================================
+
+probes:
+  # 进程探针：systemd is-active + 主 PID 存活（只读查询，无需 sudo）
+  - type: process
+    subject: demo-app
+    interval: 15
+
+  # HTTP 探针：/health 连续 3 次失败才告警（防抖，design §3.2）
+  - type: http
+    subject: demo-app
+    url: "http://127.0.0.1:8000/health"
+    expect: 200
+    consecutive_failures: 3
+    interval: 15
+
+  # 日志探针：错误行速率阈值 + 错误类归类；记录触发样本供修复后复测重放
+  - type: log
+    subject: demo-app
+    path: /var/log/demo-app/app.log
+    error_pattern: 'ERROR|Traceback'
+    rate_per_min: 5
+    interval: 30
+
+  # 流量探针：demo-app /metrics 暴露的 QPS 滑窗计数
+  - type: traffic
+    subject: demo-app
+    metrics_url: "http://127.0.0.1:8000/metrics"
+    qps_threshold: 50
+    interval: 10
