@@ -86,7 +86,9 @@ def run_sandbox(worktree: Path, wheelhouse: str, test_command: str) -> tuple[boo
             return False, f"沙箱安装失败: {(install.stdout + install.stderr)[-300:]}"
         tests = _run(
             [str(py), "-m", "pytest", "target-app/tests", "-q", "--timeout=60"],
-            cwd=worktree, timeout=SANDBOX_TIMEOUT)
+            cwd=worktree, timeout=SANDBOX_TIMEOUT,
+            # 沙箱测试不启动 demo-app 的 admin 线程（避免与生产实例抢 9101）
+            env=dict(os.environ, DEMO_APP_NO_ADMIN="1"))
         combined = (tests.stdout + tests.stderr).strip()
         summary_line = ""
         for line in reversed(combined.splitlines()):

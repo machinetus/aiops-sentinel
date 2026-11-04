@@ -62,15 +62,21 @@ def setup_logging() -> None:
 async def lifespan(_: FastAPI):
     setup_logging()
     # admin 面随业务进程启动（同进程共享 limits.registry；仅绑本机回环）
-    admin_config = uvicorn.Config(admin_app, host="127.0.0.1", port=9101,
-                                  log_level="warning", access_log=False)
-    admin_server = uvicorn.Server(admin_config)
-    threading.Thread(target=admin_server.run, daemon=True, name="admin-9101").start()
+    # 沙箱/单测环境（DEMO_APP_NO_ADMIN=1）跳过：避免与运行中的 demo-app 抢 9101
+    admin_server = None
+    if os.environ.get("DEMO_APP_NO_ADMIN") != "1":
+        admin_config = uvicorn.Config(admin_app, host="127.0.0.1", port=9101,
+                                      log_level="warning", access_log=False)
+        admin_server = uvicorn.Server(admin_config)
+        threading.Thread(target=admin_server.run, daemon=True,
+                         name="admin-9101").start()
     logger.info("demo-app started", extra={"event": "app_started",
                                            "bug_mode": bug_mode(),
-                                           "business_port": 18000, "admin_port": 9101})
+                                           "business_port": 18000,
+                                           "admin_port": 9101 if admin_server else None})
     yield
-    admin_server.should_exit = True
+    if admin_server is not None:
+        admin_server.should_exit = True
     logger.info("demo-app stopped", extra={"event": "app_stopped"})
 
 
