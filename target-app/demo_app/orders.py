@@ -31,13 +31,9 @@ def create_order(body: dict) -> dict:
     amount = body.get("amount")
     price = body.get("price", 1)
 
-    if bug_mode() == "type_bug":
-        # 故意缺陷：直接类型转换，无校验（修复 PR 将在此处加校验 + 回归测试）
-        total = int(amount) * price
-    else:
-        if not isinstance(amount, int) or isinstance(amount, bool):
-            raise HTTPException(status_code=400, detail="amount must be an integer")
-        total = amount * price
+    if not isinstance(amount, int) or isinstance(amount, bool):
+        raise HTTPException(status_code=400, detail="amount must be an integer")
+    total = amount * price
 
     order = {"order_id": uuid.uuid4().hex[:12], "item": item, "amount": amount,
              "price": price, "total": total}
