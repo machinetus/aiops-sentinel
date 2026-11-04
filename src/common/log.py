@@ -5,9 +5,12 @@ from __future__ import annotations
 import logging
 import re
 
-# 命中「键名: 值 / 键名=值 / Bearer xxx」形态的敏感字段，值部分掩码
+# 命中「键名: 值 / 键名=值 / Authorization: Bearer xxx」形态的敏感字段，值整体掩码。
+# 注意（2026-11-04 单测发现的真 bug）：value 必须吃掉可选的 "Bearer " 前缀，
+# 否则只会脱掉 "Bearer" 一词、把真实 token 留在日志里。
 SECRET_PATTERN = re.compile(
-    r"(?i)\b(token|secret|password|authorization|api[_-]?key|bearer)\b\s*[:=]?\s*(\S+)"
+    r"(?i)\b(token|secret|password|authorization|api[_-]?key)\b\s*[:=]?\s*"
+    r"(?:bearer\s+)?\S+"
 )
 _MASK = r"\1=***"
 
