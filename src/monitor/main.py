@@ -153,15 +153,20 @@ class Monitor:
         path = cfg["path"]
         new_errors: list[str] = []
         try:
-            offset = self._log_offsets.get(path, 0)
+            offset = self._log_offsets.get(path)
             size = os.path.getsize(path) if os.path.exists(path) else 0
-            if size < offset:  # 日志轮转/截断 → 从头读
-                offset = 0
-            if size > offset:
+            if offset is None:
+                # 首次见到该文件：从文件末尾开始 tail，避免重启后全量重读误告警
+                # （2026-11-04 真机教训：offset=0 导致把历史错误当新增）
+                self._log_offsets[path] = size
+            elif size < offset:  # 日志轮转/截断 → 从头读
+                self._log_offsets[path] = 0
+            elif size > offset:
                 with open(path, "r", encoding="utf-8", errors="replace") as f:
-                    f.seek(offset)
+                    f.seek(self._log_offsets[path])
                     chunk = f.read()
-                self._log_offsets[path] = offset + len(chunk.encode("utf-8", "replace"))
+                self._log_offsets[path] = self._log_offsets[path] + len(
+                    chunk.encode("utf-8", "replace"))
                 new_errors = [ln for ln in chunk.splitlines()
                               if state.pattern.search(ln)]  # type: ignore[attr-defined]
         except OSError:

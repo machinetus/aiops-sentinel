@@ -8,6 +8,7 @@ evaluate() 返回 verdict：alert / recover / none 三态。
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from typing import Literal
@@ -19,6 +20,22 @@ _EXCEPTION_RE = re.compile(
     r"\b(ValueError|TypeError|KeyError|IndexError|ZeroDivisionError|"
     r"AttributeError|NameError|RuntimeError|ConnectionError|TimeoutError)\b"
 )
+
+
+def _extract_haystack(line: str) -> str:
+    """JSON 日志行 → 解析后的 msg+exc 上做异常提取。
+
+    关键（2026-11-04 真机发现）：JSON 行内的栈是转义存储的（字面量 ``\\nValueError``），
+    直接在原始行上用 \\b 提取会因前导单词字符而失配；解析后再提取则恢复真实换行。
+    非 JSON 行（如 uvicorn 原生 traceback）按原文提取。
+    """
+    try:
+        obj = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return line
+    if isinstance(obj, dict):
+        return f"{obj.get('msg', '')}\n{obj.get('exc', '')}"
+    return line
 
 
 @dataclass
@@ -105,7 +122,7 @@ class LogProbeState:
         rate = len(new_error_lines) * (60.0 / self.interval)
         error_class = None
         for line in new_error_lines:
-            m = _EXCEPTION_RE.search(line)
+            m = _EXCEPTION_RE.search(_extract_haystack(line))
             if m:
                 error_class = m.group(1)
                 break

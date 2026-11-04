@@ -87,3 +87,57 @@ def test_log_probe_recover_uses_alert_error_class():
     assert recover.verdict == "recover"
     assert make_fingerprint("probe:log", "demo-app", recover.error_class) == \
         make_fingerprint("probe:log", "demo-app", alert.error_class)
+
+
+def test_log_probe_extracts_exception_from_escaped_json():
+    """回归（2026-11-04 真机发现）：JSON 行内栈是转义存储（字面量 \\nValueError），
+    原始行上 \\b 提取失配；必须 json.loads 后在 msg+exc 上提取。"""
+    import json as _json
+
+    state = LogProbeState("demo-app", "ERROR|Traceback", rate_per_min=5,
+                          interval_seconds=30)
+    line = _json.dumps({
+        "level": "ERROR", "msg": "order failed",
+        "exc": "Traceback (most recent call last):\n"
+               "  File \"orders.py\", line 36, in create_order\n"
+               "    total = int(amount) * price\n"
+               "ValueError: invalid literal for int() with base 10: 'abc'",
+    }, ensure_ascii=False)
+    assert "\\nValueError" in line          # 前置条件：确实是转义形态
+    r = state.evaluate([line] * 3)
+    assert r.verdict == "alert"
+    assert r.error_class == "ValueError"
+
+
+def test_log_probe_tails_from_end_on_first_sight(tmp_path, monkeypatch):
+    """回归（2026-11-04 真机发现）：monitor 重启后 offset=0 全量重读历史日志
+    → 误告警。首次见到文件必须从末尾开始 tail。"""
+    import asyncio
+
+    from src.monitor.main import Monitor
+
+    log = tmp_path / "app.log"
+    log.write_text("old ERROR lines\n" * 20, encoding="utf-8")
+    cfg = {"type": "log", "subject": "demo-app", "path": str(log),
+           "error_pattern": "ERROR|Traceback", "rate_per_min": 5, "interval": 30}
+    mon = Monitor([cfg], "http://127.0.0.1:9")
+    events: list = []
+
+    async def fake_alert(**kw):
+        events.append(("alert", kw))
+
+    async def fake_recover(fp, msg):
+        events.append(("recover", fp))
+
+    monkeypatch.setattr(mon, "report_alert", fake_alert)
+    monkeypatch.setattr(mon, "report_recover", fake_recover)
+    state = mon._make_state(cfg)
+
+    asyncio.run(mon._tick_log("probe:log", "demo-app", state, cfg))
+    assert events == []                                  # 历史错误不触发
+
+    with open(log, "a", encoding="utf-8") as f:           # 追加新错误
+        f.write("ERROR ValueError: fresh\n" * 3)
+    asyncio.run(mon._tick_log("probe:log", "demo-app", state, cfg))
+    assert len(events) == 1 and events[0][0] == "alert"
+    assert events[0][1]["error_class"] == "ValueError"
