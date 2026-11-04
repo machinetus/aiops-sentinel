@@ -71,9 +71,10 @@ def run_sandbox(worktree: Path, wheelhouse: str, test_command: str) -> tuple[boo
             _run(["python3", "-m", "venv", str(venv_dir)], timeout=60)
         pip = venv_dir / "bin" / "pip"
         # 预装：构建件（PEP517 editable 安装需要）+ 测试运行器（target-app 依赖里不含）
+        # httpx2：新版 starlette 的 TestClient 运行时依赖（2026 生态）
         prep = _run(
             [str(pip), "install", "--no-index", "--find-links", wheelhouse,
-             "setuptools", "wheel", "pytest", "pytest-timeout"],
+             "setuptools", "wheel", "pytest", "pytest-timeout", "httpx2"],
             cwd=worktree, timeout=90)
         if prep.returncode != 0:
             return False, f"沙箱构建件安装失败: {(prep.stdout + prep.stderr)[-300:]}"
