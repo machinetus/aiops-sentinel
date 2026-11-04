@@ -18,6 +18,10 @@ User=aiops
 Group=aiops
 Environment=PYTHONDONTWRITEBYTECODE=1
 EnvironmentFile=/etc/aiops/secrets.env
+# 外网代理（内网限制；LLM / GitHub 均需）；NO_PROXY 保证内部 API 直连
+Environment=HTTP_PROXY=http://10.139.242.1:8888
+Environment=HTTPS_PROXY=http://10.139.242.1:8888
+Environment=NO_PROXY=127.0.0.1,localhost
 WorkingDirectory=/opt/aiops/runtime
 # 动作白名单 / 复检参数读取 /etc/aiops/actions.yaml（design §5.1）
 ExecStart=/opt/aiops/venv/bin/python -m src.workers.main
