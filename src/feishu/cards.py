@@ -10,6 +10,10 @@ from datetime import datetime, timezone
 
 SEVERITY_TEMPLATE = {"critical": "red", "warning": "orange", "info": "blue"}
 
+# 与飞书机器人「自定义关键词」保持一致（关键词模式兜底时，所有卡片都必须含该词）；
+# 签名模式不受影响——标题前缀是纯文案。
+KEYWORD_PREFIX = "[Sentinel] "
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -25,7 +29,8 @@ def _note(text: str) -> dict:
 
 def _card(title: str, template: str, elements: list[dict]) -> dict:
     return {"config": {"wide_screen_mode": True},
-            "header": {"title": {"tag": "plain_text", "content": title},
+            "header": {"title": {"tag": "plain_text",
+                                 "content": f"{KEYWORD_PREFIX}{title}"},
                        "template": template},
             "elements": elements}
 

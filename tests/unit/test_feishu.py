@@ -64,6 +64,8 @@ def test_alert_card_structure():
                       error_class="process_dead", message="进程退出",
                       count=3, alert_id=7, evidence=["line1", "line2"])
     assert card["header"]["template"] == "red"
+    # 关键词模式兜底：标题必须含 [Sentinel]（飞书自定义关键词=Sentinel）
+    assert card["header"]["title"]["content"].startswith("[Sentinel] ")
     text = str(card["elements"])
     assert "demo-app" in text and "告警计数" in text and "alert_id=7" in text
 
