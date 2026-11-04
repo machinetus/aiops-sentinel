@@ -20,6 +20,7 @@ from ..common.config import load_config
 from ..common.log import setup_logging
 from ..llm.client import LlmClient, LlmError
 from .diag import DiagWorker
+from .fix import FixWorker
 from .whitelist import WhitelistDenied, WhitelistExecutor
 
 logger = logging.getLogger("sentinel.worker")
@@ -94,9 +95,9 @@ class OpsWorker:
 async def main_async() -> None:
     setup_logging()
     config = load_config()
-    if not config.worker.ops_enabled and not config.worker.diag_enabled:
-        logger.info("worker.ops_enabled=false 且 diag_enabled=false，Worker 退出"
-                    "（只告警不处置模式）")
+    if not (config.worker.ops_enabled or config.worker.diag_enabled
+            or config.worker.fix_enabled):
+        logger.info("ops/diag/fix 全部关闭，Worker 退出（只告警不处置模式）")
         return
     router_url = os.environ.get("AIOPS_ROUTER_URL") or config.monitor.router_url
     host = socket.gethostname()
@@ -108,16 +109,24 @@ async def main_async() -> None:
         runners.append(OpsWorker(router_url, executor,
                                  f"{host}-ops-{os.getpid()}").run())
 
-    if config.worker.diag_enabled:
+    llm = None
+    if config.worker.diag_enabled or config.worker.fix_enabled:
         try:
             llm = LlmClient.from_env(
                 timeout=float(config.llm.timeout_seconds),
                 temperature=float(config.llm.temperature))
         except LlmError as exc:
-            logger.error("LLM 未就绪，diag 角色降级为不启用: %s", exc)
-        else:
-            runners.append(DiagWorker(router_url, llm,
-                                      f"{host}-diag-{os.getpid()}").run())
+            logger.error("LLM 未就绪，diag/fix 角色降级为不启用: %s", exc)
+
+    if config.worker.diag_enabled and llm is not None:
+        runners.append(DiagWorker(router_url, llm,
+                                  f"{host}-diag-{os.getpid()}").run())
+
+    if config.worker.fix_enabled and llm is not None:
+        runners.append(FixWorker(
+            router_url, llm, f"{host}-fix-{os.getpid()}",
+            github_repo=os.environ.get("GITHUB_REPO", "machinetus/aiops-sentinel"),
+        ).run())
 
     if not runners:
         logger.info("无可用 worker 角色，退出")

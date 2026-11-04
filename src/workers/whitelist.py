@@ -26,7 +26,9 @@ logger = logging.getLogger("sentinel.worker.whitelist")
 DEFAULT_ACTIONS_PATH = "/etc/aiops/actions.yaml"
 
 # exec 型命令允许的首项前缀（sudoers 精确授权的镜像兜底；可注入便于测试）
-ALLOWED_EXEC_PREFIXES = ("/usr/bin/sudo", "/usr/bin/systemctl", "/bin/true")
+# /usr/bin/git：仅用于 deploy 动作（-C /opt/aiops/deploy pull --ff-only）
+ALLOWED_EXEC_PREFIXES = ("/usr/bin/sudo", "/usr/bin/systemctl", "/bin/true",
+                         "/usr/bin/git")
 
 _PLACEHOLDER_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
@@ -109,6 +111,25 @@ class WhitelistExecutor:
         if cfg is None:
             raise WhitelistDenied(f"未定义动作: {action_name}")
 
+        # 多步动作（如部署 = git pull + restart）：每步独立走同一套校验
+        if cfg.get("type") == "steps":
+            steps_cfg = cfg.get("steps") or []
+            if not steps_cfg:
+                raise WhitelistDenied(f"动作 {action_name} 的 steps 为空")
+            started = time.monotonic()
+            results: list[dict] = []
+            for step in steps_cfg:
+                out = self._execute_single(step, params)
+                results.append(out.detail)
+                if not out.ok:
+                    return ExecOutcome(False, "steps",
+                                       {"steps": results, "failed_step": out.detail},
+                                       round(time.monotonic() - started, 2))
+            return ExecOutcome(True, "steps", {"steps": results},
+                               round(time.monotonic() - started, 2))
+        return self._execute_single(cfg, params)
+
+    def _execute_single(self, cfg: dict, params: dict[str, Any]) -> ExecOutcome:
         # 运行时二次校验：参数只能是配置声明过的占位符
         declared = _placeholders(cfg.get("body")) | _placeholders(cfg.get("command"))
         extra = set(params) - declared

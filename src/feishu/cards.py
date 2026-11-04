@@ -105,7 +105,25 @@ def diag_card(*, incident_id: int, root_cause: str, suspect_files: list[dict],
 
 
 # ---------------------------------------------------------------------------
-# PR 确认卡（阶段 5，FixWorker；按钮 value 由 ConfirmService 消费）
+# PR 待合并卡（阶段 5，方案 A：确认动作在 GitHub —— 人工 Merge）
+# ---------------------------------------------------------------------------
+def pr_review_card(*, incident_id: int, pr_number: int, pr_url: str,
+                   root_cause: str, diff_stat: str, test_summary: str,
+                   branch: str) -> dict:
+    elements = [
+        _div(f"**Incident**：#{incident_id}　**分支**：`{branch}`"),
+        _div(f"**根因**：{root_cause}"),
+        _div(f"**PR**：[#{pr_number}]({pr_url})　`{diff_stat}`"),
+        _div(f"**沙箱测试**：`{test_summary}`"),
+        _div("请前往 GitHub 审阅并 **Merge** 本 PR；"
+             "合并后 Sentinel 将自动部署并复测（无需其他操作）。"),
+        _note(f"incident #{incident_id} · {_now()}"),
+    ]
+    return _card(f"🔧 修复待合并 · Incident #{incident_id}", "orange", elements)
+
+
+# ---------------------------------------------------------------------------
+# PR 确认卡（按钮版，需飞书自建应用卡片回调；当前为预留模板）
 # ---------------------------------------------------------------------------
 def pr_confirm_card(*, incident_id: int, patch_id: int, root_cause: str,
                     trigger_sample: str, pr_number: int, pr_url: str,
