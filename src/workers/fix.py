@@ -195,15 +195,20 @@ class FixWorker:
         status, result = "failed", {}
         try:
             await asyncio.to_thread(self._prepare_worktree, wt, branch)
-            # LLM 必须在主事件循环里 await（AsyncClient 不能跨事件循环）
-            context = build_fix_context(payload, wt)
-            raw = await self.llm.complete(FIX_SYSTEM_PROMPT, context)
-            stats = apply_patch(wt, parse_fix_output(raw).changes)
-            logger.info("补丁已应用: %s", stats.diff_stat)
-            test_ok, test_summary = await asyncio.to_thread(
-                run_sandbox, wt, self.wheelhouse, "pytest -q")
-            if not test_ok:
-                raise PatchRejected(f"沙箱测试未通过: {test_summary}")
+            # 生成→校验→沙箱；失败带反馈重试一次（design §7：单 incident ≤ 2 次）
+            stats, test_summary, feedback, last_error = None, "", "", None
+            for attempt in range(2):
+                try:
+                    stats, test_summary = await self._attempt(wt, payload, feedback)
+                    break
+                except PatchRejected as exc:
+                    last_error = exc
+                    feedback = str(exc)[:800]
+                    if attempt == 0:
+                        logger.warning("补丁第 1 次被拒，带反馈重试: %s", exc)
+                        await asyncio.to_thread(self._reset_worktree, wt)
+            if stats is None:
+                raise last_error if last_error else RuntimeError("补丁生成失败")
             pr = await asyncio.to_thread(self._commit_push_pr, wt, branch,
                                          incident_id, payload)
             status = "succeeded"
@@ -222,6 +227,27 @@ class FixWorker:
         finally:
             await asyncio.to_thread(self._cleanup_worktree, wt, branch)
         await self._report(task_id, status, result)
+
+    async def _attempt(self, wt: Path, payload: dict, feedback: str):
+        """单轮尝试：LLM 补丁 → 校验应用 → 沙箱。feedback 为上一轮失败原因。"""
+        context = build_fix_context(payload, wt)
+        if feedback:
+            context += ("\n\n# 上一轮尝试的反馈（补丁被拒绝/测试失败，请修正）\n"
+                        f"{feedback}\n请重新输出完整补丁 JSON（注意规则 3："
+                        "已存在文件只能用 replacements 修改）。")
+        raw = await self.llm.complete(FIX_SYSTEM_PROMPT, context)
+        stats = apply_patch(wt, parse_fix_output(raw).changes)
+        logger.info("补丁已应用: %s", stats.diff_stat)
+        test_ok, test_summary = await asyncio.to_thread(
+            run_sandbox, wt, self.wheelhouse, "pytest -q")
+        if not test_ok:
+            raise PatchRejected(f"沙箱测试未通过: {test_summary}")
+        return stats, test_summary
+
+    def _reset_worktree(self, wt: Path) -> None:
+        """重试前回滚上一轮补丁（保留 .sbx-venv 加速重跑）。"""
+        _run(["git", "-C", str(wt), "reset", "--hard", "HEAD"], timeout=30)
+        _run(["git", "-C", str(wt), "clean", "-fd", "target-app"], timeout=30)
 
     def _prepare_worktree(self, wt: Path, branch: str) -> None:
         """同步部分：清理旧 worktree → fetch → 建新 worktree（不碰 LLM）。"""
