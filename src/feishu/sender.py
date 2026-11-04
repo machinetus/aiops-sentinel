@@ -31,35 +31,37 @@ def sign(secret: str, timestamp: int) -> str:
 
 
 class FeishuSender:
-    def __init__(self, webhook_url: str, secret: str) -> None:
+    def __init__(self, webhook_url: str, secret: str = "") -> None:
         self.webhook_url = webhook_url
-        self.secret = secret
+        self.secret = secret.strip()
         self._client = httpx.AsyncClient(timeout=10)
 
     @classmethod
     def from_env(cls) -> "FeishuSender | None":
-        """按 config.feishu.enabled + 环境变量装配；未就绪返回 None（调用方跳过发送）。"""
+        """按 config.feishu.enabled + 环境变量装配；未就绪返回 None（调用方跳过发送）。
+
+        双模式（2026-11-04 实测确认飞书三个安全项独立生效，可同时开启）：
+        - 配置了 FEISHU_WEBHOOK_SECRET → 加签模式（payload 带 timestamp+sign）
+        - 未配置 secret → 关键词模式（payload 不带签名，卡片文案含 [Sentinel] 关键词）
+        机器人侧「签名校验」必须与 secret 配置匹配；不匹配时飞书报 19021。
+        """
         url = os.environ.get(WEBHOOK_ENV, "").strip()
-        secret = os.environ.get(SECRET_ENV, "").strip()
-        if not url or not secret:
+        if not url:
             return None
-        return cls(url, secret)
+        return cls(url, os.environ.get(SECRET_ENV, ""))
 
     async def send(self, card: dict, *, retries: int = 1) -> bool:
-        """发送交互卡片；payload 按「加签」模式组装。返回是否成功。
+        """发送交互卡片。返回是否成功。
 
-        注意（2026-11-04 真机踩坑）：timestamp 与 sign 必须用**同一个** ts 计算——
-        两次独立 time.time() 在跨秒瞬间会产生不匹配签名，飞书报
-        "sign match fail or timestamp is not within one hour"。
+        注意（2026-11-04 真机踩坑）：加签模式下 timestamp 与 sign 必须用
+        **同一个** ts 计算——两次独立 time.time() 跨秒会造成签名不匹配。
         """
         for attempt in range(retries + 1):
-            ts = int(time.time())
-            payload = {
-                "timestamp": str(ts),
-                "sign": sign(self.secret, ts),
-                "msg_type": "interactive",
-                "card": card,
-            }
+            payload: dict = {"msg_type": "interactive", "card": card}
+            if self.secret:
+                ts = int(time.time())
+                payload["timestamp"] = str(ts)
+                payload["sign"] = sign(self.secret, ts)
             try:
                 resp = await self._client.post(self.webhook_url, json=payload)
                 data = resp.json()
