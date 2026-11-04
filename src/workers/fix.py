@@ -70,11 +70,11 @@ def run_sandbox(worktree: Path, wheelhouse: str, test_command: str) -> tuple[boo
         if not py.exists():
             _run(["python3", "-m", "venv", str(venv_dir)], timeout=60)
         pip = venv_dir / "bin" / "pip"
-        # 先装构建必需件（PEP517 editable 安装需要 setuptools/wheel，均来自离线 wheelhouse）
+        # 预装：构建件（PEP517 editable 安装需要）+ 测试运行器（target-app 依赖里不含）
         prep = _run(
             [str(pip), "install", "--no-index", "--find-links", wheelhouse,
-             "setuptools", "wheel"],
-            cwd=worktree, timeout=60)
+             "setuptools", "wheel", "pytest", "pytest-timeout"],
+            cwd=worktree, timeout=90)
         if prep.returncode != 0:
             return False, f"沙箱构建件安装失败: {(prep.stdout + prep.stderr)[-300:]}"
         install = _run(
@@ -86,14 +86,20 @@ def run_sandbox(worktree: Path, wheelhouse: str, test_command: str) -> tuple[boo
         tests = _run(
             [str(py), "-m", "pytest", "target-app/tests", "-q", "--timeout=60"],
             cwd=worktree, timeout=SANDBOX_TIMEOUT)
+        combined = (tests.stdout + tests.stderr).strip()
         summary_line = ""
-        for line in reversed((tests.stdout + tests.stderr).splitlines()):
-            if "passed" in line or "failed" in line or "error" in line.lower():
+        for line in reversed(combined.splitlines()):
+            low = line.lower()
+            if any(k in low for k in ("passed", "failed", "error", "no tests ran")):
                 summary_line = line.strip()
                 break
+        if not summary_line:
+            # 兜底：取最后一行非空输出，排障时能直接看到根因
+            tail = [ln.strip() for ln in combined.splitlines() if ln.strip()]
+            summary_line = tail[-1][:200] if tail else "测试无输出"
         ok = tests.returncode == 0
         elapsed = time.monotonic() - started
-        return ok, f"{summary_line or '测试无输出'}（沙箱 {elapsed:.0f}s）"
+        return ok, f"{summary_line}（沙箱 {elapsed:.0f}s，exit={tests.returncode}）"
     except subprocess.TimeoutExpired:
         return False, f"沙箱超时（>{SANDBOX_TIMEOUT}s）"
 
