@@ -20,6 +20,8 @@ Type=simple
 # demoapp 运行业务应用；Group=aiops 使日志文件组可读（日志探针采集用）
 User=demoapp
 Group=aiops
+# /run/demo-app 由 systemd 自动创建（demoapp 可写）：admin API 状态落盘 state.json
+RuntimeDirectory=demo-app
 Environment=BUG_MODE=type_bug
 Environment=PYTHONDONTWRITEBYTECODE=1
 WorkingDirectory=/opt/aiops/deploy

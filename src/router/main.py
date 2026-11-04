@@ -16,21 +16,26 @@ SQLite 单写者 → 本进程是全系统唯一写库方，严禁多实例运�
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
 from ..common.audit import log_action
 from ..common.config import AppConfig, load_config
 from ..common.db import Database, get_db, utc_now_iso
 from ..common.fingerprint import make_fingerprint
 from ..common.log import setup_logging
+from ..feishu.cards import alert_card
+from ..feishu.sender import get_sender
 from .schemas import (
     AlertIn,
     AlertOut,
+    AlertResolveIn,
+    AlertResolveOut,
     ClaimIn,
     ClaimOut,
     ClaimedTask,
@@ -52,8 +57,11 @@ async def lifespan(_: FastAPI):
     db = get_db()
     db.connect()
     db.init_schema()
-    logger.info("router 启动完成 db=%s lease=%ss dedupe=%ss",
-                db.path, config.router.lease_seconds, config.alert.dedupe_window_seconds)
+    app.state.feishu = get_sender(config.feishu.enabled)
+    logger.info("router 启动完成 db=%s lease=%ss dedupe=%ss feishu=%s",
+                db.path, config.router.lease_seconds,
+                config.alert.dedupe_window_seconds,
+                "on" if app.state.feishu else "off")
     yield
     db.close()
     logger.info("router 已停止")
@@ -79,7 +87,7 @@ async def healthz() -> HealthOut:
 # POST /api/v1/alerts —— 告警入口 + 指纹降噪
 # ---------------------------------------------------------------------------
 @app.post("/api/v1/alerts", response_model=AlertOut, tags=["alert"])
-async def ingest_alert(alert_in: AlertIn) -> AlertOut:
+async def ingest_alert(alert_in: AlertIn, request: Request) -> AlertOut:
     """降噪规则（design §3.2）：
 
     同指纹在 dedupe_window_seconds 窗口内 → 不新建告警，count+=1 并刷新
@@ -128,8 +136,37 @@ async def ingest_alert(alert_in: AlertIn) -> AlertOut:
 
     logger.warning("新告警 id=%s fp=%s %s/%s/%s", alert_id, fingerprint[:12],
                    alert_in.source, alert_in.subject, alert_in.error_class)
-    # TODO(阶段2): 接入飞书告警卡片发送（config.feishu.enabled 门控）
+    # 飞书告警卡片（config.feishu.enabled 门控；未配置时降级为仅日志）
+    sender = getattr(request.app.state, "feishu", None)
+    if sender is not None:
+        card = alert_card(subject=alert_in.subject, severity=alert_in.severity,
+                          error_class=alert_in.error_class, message=alert_in.message
+                          or alert_in.error_class or "异常",
+                          count=1, alert_id=alert_id,
+                          evidence=(alert_in.payload or {}).get("evidence"))
+        asyncio.create_task(sender.send(card))
+    else:
+        logger.info("飞书未启用，告警 id=%s 仅落库", alert_id)
     return AlertOut(alert_id=alert_id, fingerprint=fingerprint, count=1, deduped=False)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/alerts/resolve —— 探针恢复上报（design §3.3）
+# ---------------------------------------------------------------------------
+@app.post("/api/v1/alerts/resolve", response_model=AlertResolveOut, tags=["alert"])
+async def resolve_alert(body: AlertResolveIn) -> AlertResolveOut:
+    """按指纹关闭 firing 告警；事件侧的 resolved 仍以任务复检/人工操作为准（§3.3）。"""
+    db: Database = get_db()
+    with db.lock:
+        cur = db.execute(
+            "UPDATE alert SET status = 'resolved' WHERE fingerprint = ? AND status = 'firing'",
+            (body.fingerprint,),
+        )
+        resolved = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+    if resolved:
+        logger.info("告警恢复 fp=%s 关闭 %d 条（%s）", body.fingerprint[:12], resolved,
+                    body.reason)
+    return AlertResolveOut(fingerprint=body.fingerprint, resolved_count=resolved)
 
 
 # ---------------------------------------------------------------------------

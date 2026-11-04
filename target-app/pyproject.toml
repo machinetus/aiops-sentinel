@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+# ============================================================================
+# Sentinel Demo App（被监控业务应用）
+# systemd 通过 /opt/aiops/venv-demo 内 `pip install -e target-app` 安装为 demo_app 包
+# ============================================================================
+[project]
+name = "demo-app"
+version = "0.1.0"
+description = "Sentinel 被监控业务应用（含可开关缺陷 BUG_MODE 与 admin API）"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+]
+
+[tool.setuptools.packages.find]
+include = ["demo_app*"]
