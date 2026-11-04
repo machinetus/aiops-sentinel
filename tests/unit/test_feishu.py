@@ -54,9 +54,25 @@ def test_get_sender_disabled_returns_none(monkeypatch):
     assert get_sender(enabled=False) is None
 
 
-def test_get_sender_enabled_but_missing_env_warns_and_none(monkeypatch):
+def test_get_sender_enabled_but_missing_url_returns_none(monkeypatch):
     monkeypatch.delenv("FEISHU_WEBHOOK_URL", raising=False)
     assert get_sender(enabled=True) is None
+
+
+def test_sender_keyword_mode_without_secret(monkeypatch):
+    """关键词模式：无 secret → 返回 sender 且 payload 不带 timestamp/sign。"""
+    from src.feishu import sender as sender_mod
+
+    monkeypatch.setenv("FEISHU_WEBHOOK_URL", "https://example.invalid/hook")
+    monkeypatch.delenv("FEISHU_WEBHOOK_SECRET", raising=False)
+    monkeypatch.setattr(sender_mod, "_sender", None)  # 重置单例
+    s = get_sender(enabled=True)
+    assert s is not None and s.secret == ""
+    fake = _FakeClient()
+    s._client = fake  # type: ignore[assignment]
+    assert asyncio.run(s.send({"elements": []})) is True
+    payload = fake.calls[0]
+    assert "sign" not in payload and "timestamp" not in payload
 
 
 def test_alert_card_structure():
