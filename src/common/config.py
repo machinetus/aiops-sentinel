@@ -25,7 +25,7 @@ class RouterConfig:
     """router 段：监听与任务租约（design §1.2 / §4.3）。"""
 
     host: str = "127.0.0.1"          # 安全边界：只绑回环
-    port: int = 8081
+    port: int = 18081                # 18081：目标 VM 上 8081 已被既有服务占用（2026-11-04 部署确认）
     lease_seconds: int = 300         # 任务认领租约
     claim_max_attempts: int = 2      # 租约过期重派次数上限
 

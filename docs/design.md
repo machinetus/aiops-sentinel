@@ -39,7 +39,7 @@
 │                                                                │
 │  ┌───────────────┐  告警 HTTP  ┌────────────────────┐          │
 │  │ aiops-monitor │ ──────────▶ │ aiops-router       │◀── @ 指令 │
-│  │  四类探针      │            │ 127.0.0.1:8081     │   长连接  │
+│  │  四类探针      │            │ 127.0.0.1:18081     │   长连接  │
 │  └───────────────┘            │ 降噪/分诊/状态机/派发│           │
 │  ┌───────────────┐  webhook   │ SQLite（单写者）    │──卡片──▶ 飞书群
 │  │ 业务程序(可选) │ ──────────▶ └─────────┬──────────┘◀─按钮/指令─┘
@@ -55,7 +55,7 @@
 │              + admin API(:9101)        │               │         │
 │                        ▼              └───────┬───────┘         │
 │                  ┌────────────────────────────▼─────┐           │
-│                  │ demo-app（systemd, :8000/:9101）  │           │
+│                  │ demo-app（systemd, :18000/:9101）  │           │
 │                  └──────────────────────────────────┘           │
 │          deploy 克隆拉取 ◀──────── GitHub（monorepo, main 保护） │
 └────────────────────────────────────────────────────────────────┘
@@ -65,12 +65,15 @@
 
 | 组件 | systemd 单元 | 端口 | 运行用户 | 读写面 |
 |---|---|---|---|---|
-| Router | `aiops-router.service` | `127.0.0.1:8081` | aiops | SQLite（唯一写者）、飞书、GitHub（只读） |
+| Router | `aiops-router.service` | `127.0.0.1:18081` | aiops | SQLite（唯一写者）、飞书、GitHub（只读） |
 | Monitor | `aiops-monitor.service` | — | aiops | 只读探测；写告警走 Router API |
 | Worker（Ops/Diag/Fix 三角色） | `aiops-worker.service` | — | aiops | 白名单命令、admin API、sandbox 克隆、gh、LLM |
-| demo 应用 | `demo-app.service` | `:8000` 业务（VM 内可达）、`127.0.0.1:9101` admin | demoapp | `/var/log/demo-app/app.log`、`/run/demo-app/state.json` |
+| demo 应用 | `demo-app.service` | `:18000` 业务（VM 内可达）、`127.0.0.1:9101` admin | demoapp | `/var/log/demo-app/app.log`、`/run/demo-app/state.json` |
 
 Router 内部 API（全部仅 127.0.0.1）：
+
+> 端口说明（2026-11-04 部署确认）：目标 VM 上 8081 与 8000 已被既有服务占用，
+> 故 Router 使用 **18081**、demo-app 业务口使用 **18000**；admin 9101 经查空闲沿用。
 
 | Method | Path | 调用方 | 说明 |
 |---|---|---|---|
@@ -236,7 +239,7 @@ probes:
     interval: 15
   - type: http             # GET /health；连续 3 次失败才告警（防抖）
     subject: demo-app
-    url: http://127.0.0.1:8000/health
+    url: http://127.0.0.1:18000/health
     expect: 200
     consecutive_failures: 3
     interval: 15
@@ -248,7 +251,7 @@ probes:
     interval: 30
   - type: traffic          # QPS 滑窗计数
     subject: demo-app
-    metrics_url: http://127.0.0.1:8000/metrics
+    metrics_url: http://127.0.0.1:18000/metrics
     qps_threshold: 50
     interval: 10
 ```
@@ -332,7 +335,7 @@ actions:
   restart_demo_app:
     type: exec
     command: ["/usr/bin/sudo", "/usr/bin/systemctl", "restart", "demo-app.service"]
-    verify: {type: http, url: "http://127.0.0.1:8000/health", expect: 200}
+    verify: {type: http, url: "http://127.0.0.1:18000/health", expect: 200}
     verify_attempts: 3
     verify_interval: 10
     max_per_incident: 3

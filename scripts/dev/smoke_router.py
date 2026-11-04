@@ -1,13 +1,13 @@
 """Router 骨架端到端冒烟脚本（implement.md 阶段 1 验证项 4）。
 
-前置：Router 已运行（systemd 或手动 uvicorn，默认 http://127.0.0.1:8081）。
+前置：Router 已运行（systemd 或手动 uvicorn，默认 http://127.0.0.1:18081）。
 用途：不依赖 Monitor/Worker，直接验证「告警降噪 + 认领/回传协议 + 审计」全链路。
 
 用法（VM 上）：
     python /opt/aiops/venv/bin/python scripts/dev/smoke_router.py
     # 或开发机：python scripts/dev/smoke_router.py
 可选环境变量：
-    SENTINEL_ROUTER_URL   缺省 http://127.0.0.1:8081
+    SENTINEL_ROUTER_URL   缺省 http://127.0.0.1:18081
     AIOPS_DB_PATH         缺省 /var/lib/aiops/aiops.db（与 Router 进程一致）
 
 成功输出 SMOKE PASS；任何一步失败输出 SMOKE FAIL:<步骤> 并以非零码退出。
@@ -23,7 +23,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-BASE = os.environ.get("SENTINEL_ROUTER_URL", "http://127.0.0.1:8081")
+BASE = os.environ.get("SENTINEL_ROUTER_URL", "http://127.0.0.1:18081")
 DB_PATH = os.environ.get("AIOPS_DB_PATH", "/var/lib/aiops/aiops.db")
 
 
@@ -74,9 +74,11 @@ def step(name: str, ok: bool, detail: str = "") -> None:
 def main() -> None:
     print(f"[smoke] Router={BASE} DB={DB_PATH}")
 
-    # 1. 健康检查
+    # 1. 健康检查（必须校验 service 字段：防止端口打错打到别的服务上——2026-11-04 实测教训）
     status, body = _req("GET", "/healthz")
-    step("healthz", status == 200 and body.get("status") == "ok", json.dumps(body, ensure_ascii=False))
+    step("healthz", status == 200 and body.get("status") == "ok"
+         and body.get("service") == "sentinel-router",
+         json.dumps(body, ensure_ascii=False))
 
     # 2. 告警降噪：首条新建，第二条命中窗口只计数
     alert = {"source": "probe:http", "severity": "critical", "subject": "demo-app",

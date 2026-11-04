@@ -13,7 +13,7 @@ probes:
   # HTTP 探针：/health 连续 3 次失败才告警（防抖，design §3.2）
   - type: http
     subject: demo-app
-    url: "http://127.0.0.1:8000/health"
+    url: "http://127.0.0.1:18000/health"
     expect: 200
     consecutive_failures: 3
     interval: 15
@@ -29,6 +29,6 @@ probes:
   # 流量探针：demo-app /metrics 暴露的 QPS 滑窗计数
   - type: traffic
     subject: demo-app
-    metrics_url: "http://127.0.0.1:8000/metrics"
+    metrics_url: "http://127.0.0.1:18000/metrics"
     qps_threshold: 50
     interval: 10

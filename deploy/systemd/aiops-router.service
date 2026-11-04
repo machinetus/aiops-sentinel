@@ -1,6 +1,6 @@
 # ============================================================================
 # Sentinel Router（调度中心）systemd 单元
-# design §1.2：内部 API 仅绑定 127.0.0.1:8081；SQLite 单写者（严禁多实例！）
+# design §1.2：内部 API 仅绑定 127.0.0.1:18081；SQLite 单写者（严禁多实例！）
 #
 # 安装（bootstrap.sh 已自动完成；手动方式）：
 #   sudo cp deploy/systemd/aiops-router.service /etc/systemd/system/
@@ -27,7 +27,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 # 密钥以环境变量注入（文件 root:root 0600，由 systemd 以 root 读取）
 EnvironmentFile=/etc/aiops/secrets.env
 WorkingDirectory=/opt/aiops/runtime
-# 监听地址/端口读取 /etc/aiops/config.yaml 的 router 段（默认 127.0.0.1:8081）
+# 监听地址/端口读取 /etc/aiops/config.yaml 的 router 段（默认 127.0.0.1:18081）
 # 注意：单写者约束 → 不要配置多 worker/多实例运行
 ExecStart=/opt/aiops/venv/bin/python -m src.router.main
 # 崩溃自动拉起（design R0.4）

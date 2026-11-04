@@ -11,7 +11,7 @@ SQLite 单写者 → 本进程是全系统唯一写库方，严禁多实例运�
 
 启动方式：
 - VM（systemd）：ExecStart = /opt/aiops/venv/bin/python -m src.router.main
-- 开发机手动：   python -m uvicorn src.router.main:app --host 127.0.0.1 --port 8081
+- 开发机手动：   python -m uvicorn src.router.main:app --host 127.0.0.1 --port 18081
 """
 
 from __future__ import annotations

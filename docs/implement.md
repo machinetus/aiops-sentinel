@@ -41,7 +41,7 @@ gh auth status
 ```bash
 sudo bash deploy/bootstrap.sh
 systemctl status aiops-router aiops-monitor aiops-worker demo-app --no-pager
-curl -s http://127.0.0.1:8081/healthz
+curl -s http://127.0.0.1:18081/healthz
 sqlite3 /var/lib/aiops/aiops.db '.tables'   # 五表齐全
 ```
 

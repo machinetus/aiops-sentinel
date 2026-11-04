@@ -23,9 +23,10 @@ Group=aiops
 Environment=BUG_MODE=type_bug
 Environment=PYTHONDONTWRITEBYTECODE=1
 WorkingDirectory=/opt/aiops/deploy
-# 业务端口 :8000（VM 内可达，宿主机经 VMware 端口转发访问）
+# 业务端口 :18000（VM 内可达，宿主机经 VMware 端口转发访问；
+# 8000 在目标 VM 上已被既有服务占用，2026-11-04 部署确认后改用 18000）
 # 管理端口 127.0.0.1:9101（限流/封禁 admin API，仅本机，Agent 专用）
-ExecStart=/opt/aiops/venv-demo/bin/python -m uvicorn demo_app.main:app --host 0.0.0.0 --port 8000
+ExecStart=/opt/aiops/venv-demo/bin/python -m uvicorn demo_app.main:app --host 0.0.0.0 --port 18000
 # 日志落文件（design §3.1 日志探针的数据源）：/var/log/demo-app/app.log
 StandardOutput=append:/var/log/demo-app/app.log
 StandardError=append:/var/log/demo-app/app.log
