@@ -18,6 +18,8 @@ import httpx
 
 from ..common.config import load_config
 from ..common.log import setup_logging
+from ..llm.client import LlmClient, LlmError
+from .diag import DiagWorker
 from .whitelist import WhitelistDenied, WhitelistExecutor
 
 logger = logging.getLogger("sentinel.worker")
@@ -92,14 +94,35 @@ class OpsWorker:
 async def main_async() -> None:
     setup_logging()
     config = load_config()
-    if not config.worker.ops_enabled:
-        logger.info("worker.ops_enabled=false，Worker 退出（只告警不处置模式）")
+    if not config.worker.ops_enabled and not config.worker.diag_enabled:
+        logger.info("worker.ops_enabled=false 且 diag_enabled=false，Worker 退出"
+                    "（只告警不处置模式）")
         return
     router_url = os.environ.get("AIOPS_ROUTER_URL") or config.monitor.router_url
-    actions_path = os.environ.get("AIOPS_ACTIONS", "/etc/aiops/actions.yaml")
-    executor = WhitelistExecutor.from_file(actions_path)
-    worker_id = f"{socket.gethostname()}-ops-{os.getpid()}"
-    await OpsWorker(router_url, executor, worker_id).run()
+    host = socket.gethostname()
+    runners: list = []
+
+    if config.worker.ops_enabled:
+        actions_path = os.environ.get("AIOPS_ACTIONS", "/etc/aiops/actions.yaml")
+        executor = WhitelistExecutor.from_file(actions_path)
+        runners.append(OpsWorker(router_url, executor,
+                                 f"{host}-ops-{os.getpid()}").run())
+
+    if config.worker.diag_enabled:
+        try:
+            llm = LlmClient.from_env(
+                timeout=float(config.llm.timeout_seconds),
+                temperature=float(config.llm.temperature))
+        except LlmError as exc:
+            logger.error("LLM 未就绪，diag 角色降级为不启用: %s", exc)
+        else:
+            runners.append(DiagWorker(router_url, llm,
+                                      f"{host}-diag-{os.getpid()}").run())
+
+    if not runners:
+        logger.info("无可用 worker 角色，退出")
+        return
+    await asyncio.gather(*runners)
 
 
 if __name__ == "__main__":
