@@ -29,8 +29,9 @@ from ..common.config import AppConfig, load_config
 from ..common.db import Database, get_db, utc_now_iso
 from ..common.fingerprint import make_fingerprint
 from ..common.log import setup_logging
-from ..feishu.cards import alert_card
+from ..feishu.cards import alert_card, escalation_card, result_card
 from ..feishu.sender import get_sender
+from . import triage
 from .schemas import (
     AlertIn,
     AlertOut,
@@ -147,6 +148,18 @@ async def ingest_alert(alert_in: AlertIn, request: Request) -> AlertOut:
         asyncio.create_task(sender.send(card))
     else:
         logger.info("飞书未启用，告警 id=%s 仅落库", alert_id)
+
+    # 阶段 3：分诊（仅新告警）→ incident/task；flapping 直接转人工
+    with db.lock:
+        triage_info = triage.triage_new_alert(
+            db, alert_id=alert_id, source=alert_in.source,
+            severity=alert_in.severity, subject=alert_in.subject,
+            error_class=alert_in.error_class)
+    if triage_info.get("escalated") and sender is not None:
+        asyncio.create_task(sender.send(escalation_card(
+            incident_id=triage_info["incident_id"], subject=alert_in.subject,
+            reason=triage_info["reason"],
+            attempted="flapping 保护：跳过自动重启")))
     return AlertOut(alert_id=alert_id, fingerprint=fingerprint, count=1, deduped=False)
 
 
@@ -218,12 +231,12 @@ async def claim_task(body: ClaimIn) -> ClaimOut:
 # POST /api/v1/tasks/{task_id}/result —— 结果回传
 # ---------------------------------------------------------------------------
 @app.post("/api/v1/tasks/{task_id}/result", response_model=TaskResultOut, tags=["task"])
-async def submit_task_result(task_id: int, body: TaskResultIn) -> TaskResultOut:
+async def submit_task_result(task_id: int, body: TaskResultIn, request: Request) -> TaskResultOut:
     """回传结果（认领协议另一半）：
 
     - 404 任务不存在；409 状态非 running（含重复回传）；403 worker 不匹配。
-    - TODO(阶段3): 按 result 驱动 incident 状态机
-      （acting→verifying→resolved / escalated，design §2.6）。
+    - 阶段 3：驱动 incident 状态机（resolved / escalated，design §2.6）
+      并发结果 / 升级卡片。
     """
     db: Database = get_db()
     now = utc_now_iso()
@@ -243,11 +256,42 @@ async def submit_task_result(task_id: int, body: TaskResultIn) -> TaskResultOut:
             (body.status, json.dumps(body.result, ensure_ascii=False), now, task_id),
         )
         incident_id = int(row["incident_id"])
+        task_type = row["type"]
+        outcome = triage.apply_task_result(
+            db, incident_id=incident_id, task_type=task_type,
+            status=body.status, result=body.result)
+        subject = triage.incident_subject(db, incident_id)
 
-    log_action(db, operator="agent", action=f"task_{body.status}",
-               incident_id=incident_id, task_id=task_id,
-               detail={"worker_id": body.worker_id})
-    logger.info("任务回传 task=%s → %s", task_id, body.status)
+    denied = bool(body.result.get("denied"))
+    detail: dict = {"worker_id": body.worker_id, "task_type": task_type}
+    for key in ("action", "kind", "command", "exit_code", "status_code",
+                "verify", "duration_s", "output_tail", "error"):
+        if key in body.result:
+            detail[key] = body.result[key]
+    log_action(db, operator="agent",
+               action="whitelist_deny" if denied else f"task_{body.status}",
+               incident_id=incident_id, task_id=task_id, detail=detail)
+
+    sender = getattr(request.app.state, "feishu", None)
+    if sender is not None:
+        if outcome["state"] == "resolved":
+            verify = body.result.get("verify") or {}
+            card = result_card(
+                incident_id=incident_id, subject=subject,
+                action=str(body.result.get("action") or task_type),
+                outcome="成功",
+                detail=(f"复检 {verify.get('attempts', 0)} 次通过"
+                        if verify.get("attempts") else "执行成功（无复检配置）"),
+                cost_seconds=body.result.get("duration_s"))
+        else:
+            card = escalation_card(
+                incident_id=incident_id, subject=subject,
+                reason=outcome.get("reason", "自动处置失败"),
+                attempted=str(body.result.get("action") or task_type))
+        asyncio.create_task(sender.send(card))
+
+    logger.info("任务回传 task=%s → %s incident=%s→%s",
+                task_id, body.status, incident_id, outcome["state"])
     return TaskResultOut(task_id=task_id, status=body.status, accepted=True)
 
 
