@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+# target-app 加入 path：单测可直接 import demo_app（沙箱内仍走 pip install -e）
+pythonpath = [".", "target-app"]
 timeout = 60
 addopts = "-q"

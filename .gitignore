@@ -8,6 +8,9 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+*.egg-info/
+build/
+dist/
 
 # 运行期数据（VM 上由 bootstrap/服务生成）
 *.db

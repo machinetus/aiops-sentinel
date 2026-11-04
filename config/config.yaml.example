@@ -18,6 +18,10 @@ alert:
   # 告警指纹降噪窗口（design §3.2）：同指纹 5 分钟内只计数、不发新告警
   dedupe_window_seconds: 300
 
+monitor:
+  # 感知面上报地址（env AIOPS_ROUTER_URL 可覆盖）
+  router_url: "http://127.0.0.1:18081"
+
 # LLM（阶段 4 启用；OpenAI 兼容，可换 GLM / DeepSeek / 本地模型）
 llm:
   enabled: false

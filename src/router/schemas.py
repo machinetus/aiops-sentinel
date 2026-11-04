@@ -42,6 +42,18 @@ class AlertOut(BaseModel):
     deduped: bool = Field(description="True=命中降噪窗口（只计数未新建）")
 
 
+class AlertResolveIn(BaseModel):
+    """探针恢复上报（design §3.3）：Monitor 恢复时按指纹关闭 firing 告警。"""
+
+    fingerprint: str = Field(min_length=8, description="待关闭告警的指纹")
+    reason: str = Field(default="", description="恢复原因（写入日志/审计）")
+
+
+class AlertResolveOut(BaseModel):
+    fingerprint: str
+    resolved_count: int = Field(description="被关闭的告警行数（0=无在途告警）")
+
+
 # ---------------------------------------------------------------------------
 # POST /api/v1/tasks/claim —— 任务认领（design §4.3）
 # ---------------------------------------------------------------------------

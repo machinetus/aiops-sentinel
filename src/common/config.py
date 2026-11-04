@@ -38,6 +38,13 @@ class AlertConfig:
 
 
 @dataclass
+class MonitorConfig:
+    """monitor 段：感知面上报地址（design §3）。"""
+
+    router_url: str = "http://127.0.0.1:18081"
+
+
+@dataclass
 class LlmConfig:
     """llm 段（阶段 4 生效）。"""
 
@@ -68,6 +75,7 @@ class FeishuConfig:
 class AppConfig:
     router: RouterConfig = field(default_factory=RouterConfig)
     alert: AlertConfig = field(default_factory=AlertConfig)
+    monitor: MonitorConfig = field(default_factory=MonitorConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     feishu: FeishuConfig = field(default_factory=FeishuConfig)
@@ -105,6 +113,7 @@ def load_config(path: str | None = None) -> AppConfig:
     return AppConfig(
         router=_section(data, "router", RouterConfig),
         alert=_section(data, "alert", AlertConfig),
+        monitor=_section(data, "monitor", MonitorConfig),
         llm=_section(data, "llm", LlmConfig),
         worker=_section(data, "worker", WorkerConfig),
         feishu=_section(data, "feishu", FeishuConfig),
