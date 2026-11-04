@@ -128,11 +128,18 @@ def build_fix_context(payload: dict, worktree: Path) -> str:
         })
     tests_dir = worktree / "target-app" / "tests"
     test_files = sorted(p.name for p in tests_dir.glob("*.py")) if tests_dir.is_dir() else []
+    # 测试正文一并给出：补丁必须与现有断言兼容（否则沙箱必挂）
+    test_contents = [
+        {"path": f"target-app/tests/{name}",
+         "content": _read_source(worktree, f"target-app/tests/{name}", 200)}
+        for name in test_files[:3]
+    ]
     context = {
         "root_cause": payload.get("root_cause"),
         "error_class": payload.get("error_class"),
         "suspect_files": suspects,
         "test_files": test_files,
+        "test_contents": test_contents,
         "sample": payload.get("sample"),
     }
     return json.dumps(context, ensure_ascii=False, indent=1)
