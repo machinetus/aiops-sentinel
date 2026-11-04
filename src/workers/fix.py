@@ -279,28 +279,54 @@ class FixWorker:
                       timeout=60)
         if commit.returncode != 0:
             raise RuntimeError(f"commit 失败: {commit.stderr[-300:]}")
-        push = _run(["git", "-C", str(wt), "push",
-                     f"https://x-access-token:{self.token}@github.com/"
-                     f"{self.github_repo}.git", f"HEAD:{branch}"], timeout=120)
-        if push.returncode != 0:
-            raise RuntimeError(f"push 失败: {push.stderr[-300:]}")
+        # GitHub 5xx 间歇性故障（2026-11-04 实测多次 502）→ push 重试 3 次
+        last_err = ""
+        for attempt in range(3):
+            push = _run(["git", "-C", str(wt), "push",
+                         f"https://x-access-token:{self.token}@github.com/"
+                         f"{self.github_repo}.git", f"HEAD:{branch}"], timeout=120)
+            if push.returncode == 0:
+                break
+            last_err = push.stderr[-300:]
+            logger.warning("push 失败（attempt=%d）: %s", attempt + 1, last_err)
+            if attempt < 2:
+                time.sleep(5)
+        else:
+            raise RuntimeError(f"push 失败: {last_err}")
 
         body = (f"## 自动修复提案（Sentinel AIOps）\n\n"
                 f"- Incident: #{incident_id}\n"
                 f"- 根因: {payload.get('root_cause')}\n\n"
                 f"> 人工确认：审阅后 Merge 本 PR，Sentinel 将自动部署并复测。")
         # 注意：方案 A 由人工在 GitHub 直接 Merge 确认，必须是普通 PR（draft 不能 merge）
-        resp = httpx.post(
-            f"{GITHUB_API}/repos/{self.github_repo}/pulls",
-            headers={"Authorization": f"Bearer {self.token}",
-                     "Accept": "application/vnd.github+json"},
-            json={"title": f"[aiops] fix: incident#{incident_id}",
-                  "head": branch, "base": "main", "body": body},
-            timeout=30)
-        if resp.status_code != 201:
-            raise RuntimeError(f"建 PR 失败 HTTP {resp.status_code}: {resp.text[:300]}")
-        data = resp.json()
-        return {"number": data["number"], "html_url": data["html_url"]}
+        headers = {"Authorization": f"Bearer {self.token}",
+                   "Accept": "application/vnd.github+json"}
+        pr_payload = {"title": f"[aiops] fix: incident#{incident_id}",
+                      "head": branch, "base": "main", "body": body}
+        last_err = ""
+        for attempt in range(3):
+            resp = httpx.post(f"{GITHUB_API}/repos/{self.github_repo}/pulls",
+                              headers=headers, json=pr_payload, timeout=30)
+            if resp.status_code == 201:
+                data = resp.json()
+                return {"number": data["number"], "html_url": data["html_url"]}
+            # 422 且分支已有 open PR → 首轮 5xx 其实建成了，复用
+            if resp.status_code == 422:
+                owner = self.github_repo.split("/")[0]
+                q = httpx.get(f"{GITHUB_API}/repos/{self.github_repo}/pulls",
+                              headers=headers,
+                              params={"head": f"{owner}:{branch}", "state": "open"},
+                              timeout=30)
+                if q.status_code == 200 and q.json():
+                    data = q.json()[0]
+                    return {"number": data["number"], "html_url": data["html_url"]}
+            last_err = f"HTTP {resp.status_code}: {resp.text[:300]}"
+            logger.warning("建 PR 失败（attempt=%d）: %s", attempt + 1, last_err)
+            if resp.status_code >= 500 and attempt < 2:
+                time.sleep(5)
+                continue
+            break
+        raise RuntimeError(f"建 PR 失败: {last_err}")
 
     def _cleanup_worktree(self, wt: Path, branch: str) -> None:
         try:
