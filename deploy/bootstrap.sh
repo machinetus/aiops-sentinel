@@ -58,7 +58,10 @@ install -d -o aiops  -g aiops -m 0750 /opt/aiops/deploy
 install -d -o aiops  -g aiops -m 0750 /opt/aiops/sandbox /opt/aiops/sandbox/repo /opt/aiops/sandbox/wheelhouse
 install -d -o aiops  -g aiops -m 0750 /var/lib/aiops /var/log/aiops
 install -d -o demoapp -g aiops -m 0750 /var/log/demo-app
-install -d -o root   -g root  -m 0750 /etc/aiops
+# 注意：/etc/aiops 必须组可读（root:aiops 0750）——aiops 服务用户需要 traverse 目录
+# 读取 config/probes/actions.yaml；secrets.env 保持 0600 由 systemd 以 root 注入环境。
+# （2026-11-04 真机踩坑：root:root 0750 导致服务一直读不到配置、静默用默认值）
+install -d -o root -g aiops -m 0750 /etc/aiops
 
 # ---------- 3. 三克隆分工（design D12：运行 / 部署 / 改码物理隔离） ----------
 clone_to() {
@@ -105,9 +108,12 @@ chown -R aiops:aiops /opt/aiops/sandbox
 # ---------- 5. 配置与密钥（design §9.2；密钥 0600 不入库） ----------
 for f in config.yaml probes.yaml actions.yaml; do
   if [[ ! -f "/etc/aiops/$f" ]]; then
-    install -o root -g root -m 0644 "$SRC_DIR/config/$f.example" "/etc/aiops/$f"
+    install -o root -g aiops -m 0640 "$SRC_DIR/config/$f.example" "/etc/aiops/$f"
     echo "[bootstrap] 已生成 /etc/aiops/$f"
   fi
+  # 幂等修正历史权限（root:root 0644 → root:aiops 0640，保证 aiops 可读）
+  chown root:aiops "/etc/aiops/$f" 2>/dev/null || true
+  chmod 0640 "/etc/aiops/$f" 2>/dev/null || true
 done
 if [[ ! -f /etc/aiops/secrets.env ]]; then
   cat > /etc/aiops/secrets.env <<'EOF'
