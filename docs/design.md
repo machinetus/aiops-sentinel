@@ -505,9 +505,14 @@ aiops ALL=(root) NOPASSWD: /usr/bin/systemctl restart demo-app.service
 
 ### 10.1 场景一：假死自愈（约 60s，无人工）
 
+> 实现备注（2026-11-04 部署实测）：demo-app 配置了 `Restart=on-failure`，
+> 纯 SIGKILL 会被 systemd 在 3s 内拉起，探针（15s 周期）大概率错过宕机窗口。
+> 故 `chaos_kill.sh` = SIGKILL **+ stop**，把宕机状态留给 Agent 处置——
+> 场景一里 Worker 的白名单 restart 动作才有意义。
+
 | t | 动作 | 群内可见 |
 |---|---|---|
-| t0 | `bash scripts/demo/chaos_kill.sh`（kill -9 主进程） | — |
+| t0 | `bash scripts/demo/chaos_kill.sh`（SIGKILL + stop） | — |
 | ~t+15s | 探针告警（critical） | 🔴 告警卡片：demo-app 进程退出（PID …） |
 | ~t+20s | OpsWorker 白名单重启 + 复检 | — |
 | ~t+45s | 复检 3/3 通过 | 🟢 结果卡片：已自动重启并恢复，耗时 Xs，Incident #n resolved |
