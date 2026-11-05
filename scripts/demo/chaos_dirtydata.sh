@@ -17,7 +17,8 @@ BASE="http://127.0.0.1:18000"
 
 if [[ "${1:-}" == "--reset" ]]; then
   echo "[chaos] 重置 /opt/aiops/deploy 到基线 v0.1-base 并重启 demo-app ..."
-  sudo -u aiops git -C /opt/aiops/deploy fetch --tags -q
+  # --force：v0.1-base tag 会被重打（基线演进时本地旧 tag 需强制同步）
+  sudo -u aiops git -C /opt/aiops/deploy fetch --tags --force -q
   sudo -u aiops git -C /opt/aiops/deploy reset --hard v0.1-base -q
   sudo systemctl restart demo-app
   sleep 3
