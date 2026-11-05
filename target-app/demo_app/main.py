@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from .admin import admin_app
@@ -131,6 +131,16 @@ async def orders(request: Request):
     body = await request.json()
     try:
         return create_order(body)
+    except HTTPException:
+        # 客户端输入错误（如 amount 类型非法）：按 4xx 返回，不计为服务端错误
+        raise
+    except (TypeError, ValueError) as exc:
+        # 防御性兜底：业务层若漏抛 HTTPException，也转换为 400 而非 500
+        logger.warning("order rejected", extra={
+            "event": "order_rejected", "body": body,
+            "client_ip": request.client.host if request.client else "-",
+            "error": str(exc)})
+        raise HTTPException(status_code=400, detail="invalid order payload") from exc
     except Exception:
         # 显式记录请求体：日志探针捕获后作为修复复测（重放）的触发样本
         logger.error("order failed", extra={

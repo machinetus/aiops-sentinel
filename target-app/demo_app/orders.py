@@ -33,6 +33,8 @@ def create_order(body: dict) -> dict:
 
     if not isinstance(amount, int) or isinstance(amount, bool):
         raise HTTPException(status_code=400, detail="amount must be an integer")
+    if not isinstance(price, (int, float)) or isinstance(price, bool):
+        raise HTTPException(status_code=400, detail="price must be a number")
     total = amount * price
 
     order = {"order_id": uuid.uuid4().hex[:12], "item": item, "amount": amount,
