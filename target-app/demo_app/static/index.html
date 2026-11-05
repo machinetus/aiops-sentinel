@@ -130,8 +130,9 @@ async function refresh() {
       $('limitBadge').textContent = '正常';
     }
     const rows = (orders.orders || []).slice().reverse();
+    const localTime = s => { try { return new Date(s).toLocaleTimeString('zh-CN', { hour12: false }); } catch (e) { return s || ''; } };
     $('orderList').innerHTML = rows.length ? rows.map(o => `<tr>
-      <td>${esc((o.ts || '').slice(11, 19))}</td>
+      <td>${esc(localTime(o.ts))}</td>
       <td class="mono">${esc(o.order_id)}</td>
       <td>${esc(o.item)}</td>
       <td>${esc(o.amount)}</td>
