@@ -31,9 +31,14 @@ def create_order(body: dict) -> dict:
     amount = body.get("amount")
     price = body.get("price", 1)
 
-    if not isinstance(amount, int) or isinstance(amount, bool):
+    # 无论 BUG_MODE 如何，入参校验必须在业务计算之前完成：
+    # 非整数（含字符串 "abc"、布尔值、None）一律 400，避免 int()/乘法抛 ValueError 变成 500。
+    if isinstance(amount, bool) or not isinstance(amount, int):
         raise HTTPException(status_code=400, detail="amount must be an integer")
-    total = amount * price
+    try:
+        total = amount * price
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="invalid amount or price") from exc
 
     order = {"order_id": uuid.uuid4().hex[:12], "item": item, "amount": amount,
              "price": price, "total": total}
