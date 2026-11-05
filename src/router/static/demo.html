@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Sentinel 演示控制台</title>
+<style>
+  :root { --bg:#0b0f17; --panel:#121826; --line:#1f2937; --text:#e5edf7;
+          --muted:#7c8aa0; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --accent:#38bdf8; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; justify-content:space-between;
+           padding:16px 24px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; }
+  header .links a { color:var(--accent); font-size:13px; text-decoration:none; margin-left:16px; }
+  header .links a:hover { text-decoration:underline; }
+  .sub { padding:10px 24px; color:var(--muted); font-size:13px; }
+  main { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));
+         gap:16px; padding:8px 24px 30px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+          padding:18px; display:flex; flex-direction:column; }
+  .card h2 { font-size:15px; margin:0 0 6px; }
+  .card .tag { font-size:11px; color:var(--muted); letter-spacing:.08em; margin-bottom:10px; }
+  .card p { font-size:12.5px; color:var(--muted); line-height:1.65; margin:0 0 14px; flex:1; }
+  .card .expect { font-size:12px; color:var(--muted); background:#0c111b;
+                  border:1px solid var(--line); border-radius:9px; padding:10px 12px;
+                  margin-bottom:14px; line-height:1.7; }
+  .card .expect b { color:var(--text); }
+  button { padding:11px 14px; border:0; border-radius:9px; font-size:13.5px;
+           font-weight:600; cursor:pointer; color:#fff; background:var(--accent); }
+  button.danger { background:var(--bad); }
+  button.warn { background:var(--warn); color:#111; }
+  button.reset { background:#374151; }
+  button:hover { filter:brightness(1.15); }
+  button:disabled { opacity:.5; cursor:wait; }
+  .out { margin-top:10px; font-size:12px; color:var(--ok); white-space:pre-wrap;
+         min-height:16px; }
+  .out.err { color:var(--bad); }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧪 Sentinel 演示控制台 <span style="font-size:12px;color:var(--muted);font-weight:400">一键注入异常 · 观察 Router → Worker 全自动处置</span></h1>
+  <div class="links">
+    <a href="/">运维控制台</a>
+    <a href="http://10.139.242.129:18000/" target="_blank">业务系统</a>
+  </div>
+</header>
+<div class="sub">建议开两个窗口：本页点按钮触发异常，切到「运维控制台」看告警流 / 事件状态机 / 任务分派实时流动；飞书群同步收卡片。</div>
+
+<main>
+  <section class="card">
+    <h2>① 假死自愈</h2>
+    <div class="tag">SCENARIO · PROCESS DOWN</div>
+    <p>对业务进程执行 SIGKILL 并停止服务，模拟宕机。Agent 应全自动恢复，无需人工。</p>
+    <div class="expect">预期链路：<b>≤15s 进程告警</b> → Router 分诊 → <b>OpsWorker 白名单重启</b> → 复检 3×10s → resolved → 飞书绿卡</div>
+    <button id="btn-kill" onclick="trigger('kill', 'btn-kill')">注入宕机</button>
+    <div class="out" id="out-kill"></div>
+  </section>
+
+  <section class="card">
+    <h2>② 代码缺陷 → LLM 修复</h2>
+    <div class="tag">SCENARIO · CODE BUG</div>
+    <p>注入 10 次脏数据（amount=abc），触发 ValueError 500。Agent 诊断根因、生成补丁与 PR，等你人工合并。</p>
+    <div class="expect">预期链路：告警卡 → <b>LLM 根因卡</b> → 修复任务 → 沙箱测试 → <b>PR 卡</b> → 你去 GitHub 合并 → 自动部署复测 → 绿卡</div>
+    <button class="warn" id="btn-dirty" onclick="trigger('dirty_data', 'btn-dirty')">注入脏数据 ×10</button>
+    <div class="out" id="out-dirty"></div>
+  </section>
+
+  <section class="card">
+    <h2>③ 异常流量 → 限流</h2>
+    <div class="tag">SCENARIO · TRAFFIC</div>
+    <p>25 秒 × 50 并发压测搜索接口。流量探针检测 QPS 超阈值后自动限流，到期自动解除。</p>
+    <div class="expect">预期链路：QPS 告警 → Router 派发 <b>set_rate_limit</b> → 业务页防护状态显示限流 → 到期解除 → 绿卡</div>
+    <button class="warn" id="btn-flood" onclick="trigger('flood', 'btn-flood')">开始压测</button>
+    <div class="out" id="out-flood"></div>
+  </section>
+
+  <section class="card">
+    <h2>④ 安全负测试</h2>
+    <div class="tag">SECURITY · WHITELIST DENY</div>
+    <p>注入一个越权任务（action=rm_rf_slash），验证三重门拒绝、审计留痕与转人工。</p>
+    <div class="expect">预期链路：<b>whitelist_deny 审计</b> → 任务 failed → 事件 escalated → 飞书红色转人工卡</div>
+    <button class="danger" id="btn-attack" onclick="trigger('whitelist_attack', 'btn-attack')">注入越权命令</button>
+    <div class="out" id="out-attack"></div>
+  </section>
+
+  <section class="card">
+    <h2>⑤ 重置演示基线</h2>
+    <div class="tag">RESET · v0.1-base</div>
+    <p>把业务系统重置回带缺陷的演示基线（v0.1-base）并重启，便于场景二重复演练。</p>
+    <div class="expect">操作：deploy 克隆 → <b>reset --hard v0.1-base</b> → 重启 demo-app → bug_mode=type_bug</div>
+    <button class="reset" id="btn-reset" onclick="trigger('reset', 'btn-reset')">重置到基线</button>
+    <div class="out" id="out-reset"></div>
+  </section>
+</main>
+
+<script>
+async function trigger(action, btnId) {
+  const btn = document.getElementById(btnId);
+  const out = document.getElementById('out-' + btnId.replace('btn-', ''));
+  btn.disabled = true;
+  out.className = 'out';
+  out.textContent = '执行中…';
+  try {
+    const resp = await fetch('/api/demo/trigger', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action }),
+    });
+    const data = await resp.json();
+    out.textContent = data.message || JSON.stringify(data);
+    if (!data.ok) out.classList.add('err');
+  } catch (e) {
+    out.className = 'out err';
+    out.textContent = '触发失败: ' + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

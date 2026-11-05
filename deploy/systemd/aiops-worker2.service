@@ -1,0 +1,33 @@
+# ============================================================================
+# Sentinel Worker 第二实例（多 Worker 演示）
+# 与 aiops-worker 完全相同的角色与代码，独立进程；两个实例通过 Router 的
+# claim 协议（原子 SELECT+UPDATE + 5min 租约）竞争领取任务——
+# 运维控制台的任务分派表里可以直接看到不同 worker_id 接活。
+#
+# 启用（演示多 worker 分派时）：
+#   sudo systemctl enable --now aiops-worker2
+# 停用：
+#   sudo systemctl disable --now aiops-worker2
+# ============================================================================
+[Unit]
+Description=Sentinel AIOps Worker #2 (多实例演示)
+After=network-online.target
+Wants=network-online.target
+Requires=aiops-router.service
+
+[Service]
+Type=simple
+User=aiops
+Group=aiops
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/etc/aiops/secrets.env
+Environment=HTTP_PROXY=http://10.139.242.1:8888
+Environment=HTTPS_PROXY=http://10.139.242.1:8888
+Environment=NO_PROXY=127.0.0.1,localhost
+WorkingDirectory=/opt/aiops/runtime
+ExecStart=/opt/aiops/venv/bin/python -m src.workers.main
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
