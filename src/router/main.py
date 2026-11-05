@@ -20,10 +20,12 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 
 from ..common.audit import log_action
@@ -35,6 +37,7 @@ from ..feishu.cards import (alert_card, diag_card, escalation_card,
                             pr_review_card, result_card)
 from ..feishu.sender import get_sender
 from . import triage
+from .dashboard import dashboard_app
 from .schemas import (
     AlertIn,
     AlertOut,
@@ -63,12 +66,24 @@ async def lifespan(_: FastAPI):
     db.init_schema()
     app.state.feishu = get_sender(config.feishu.enabled)
     watch_task = asyncio.create_task(_pr_watch_loop())  # 阶段 5：PR 合并轮询
-    logger.info("router 启动完成 db=%s lease=%ss dedupe=%ss feishu=%s",
+    # 只读运维控制台（演示用；仅读 DB，不写不执行副作用）
+    dash_server = None
+    if config.dashboard.enabled:
+        dash_server = uvicorn.Server(uvicorn.Config(
+            dashboard_app, host=config.dashboard.host, port=config.dashboard.port,
+            log_level="warning", access_log=False))
+        threading.Thread(target=dash_server.run, daemon=True,
+                         name="dashboard-18080").start()
+    logger.info("router 启动完成 db=%s lease=%ss dedupe=%ss feishu=%s dashboard=%s",
                 db.path, config.router.lease_seconds,
                 config.alert.dedupe_window_seconds,
-                "on" if app.state.feishu else "off")
+                "on" if app.state.feishu else "off",
+                f"{config.dashboard.host}:{config.dashboard.port}"
+                if dash_server else "off")
     yield
     watch_task.cancel()
+    if dash_server is not None:
+        dash_server.should_exit = True
     db.close()
     logger.info("router 已停止")
 

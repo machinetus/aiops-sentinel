@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import logging
 import os
@@ -24,6 +25,9 @@ from fastapi.responses import FileResponse, JSONResponse
 from .admin import admin_app
 from .limits import registry
 from .orders import bug_mode, create_order
+
+# 最近订单（内存环形缓冲，业务页面展示；进程重启清空）
+_RECENT_ORDERS: collections.deque = collections.deque(maxlen=50)
 
 logger = logging.getLogger("demo_app")
 
@@ -122,7 +126,14 @@ async def health() -> dict:
 
 @app.get("/metrics")
 async def metrics() -> dict:
-    return {"service": "demo-app", "qps": registry.qps()}
+    return {"service": "demo-app", "qps": registry.qps(),
+            "limits": registry.snapshot()}
+
+
+@app.get("/api/orders")
+async def list_orders() -> dict:
+    """最近订单（业务页面展示用；内存环形缓冲）。"""
+    return {"orders": list(_RECENT_ORDERS)}
 
 
 @app.post("/api/orders")
@@ -130,7 +141,7 @@ async def orders(request: Request):
     """下单。type_bug 模式下 amount 传非整数会 500（场景二触发源）。"""
     body = await request.json()
     try:
-        return create_order(body)
+        result = create_order(body)
     except Exception:
         # 显式记录请求体：日志探针捕获后作为修复复测（重放）的触发样本
         logger.error("order failed", extra={
@@ -138,6 +149,11 @@ async def orders(request: Request):
             "client_ip": request.client.host if request.client else "-"},
             exc_info=True)
         raise
+    _RECENT_ORDERS.append({
+        **result,
+        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    })
+    return result
 
 
 @app.get("/api/search")

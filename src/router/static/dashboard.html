@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Sentinel 运维控制台</title>
+<style>
+  :root { --bg:#0b0f17; --panel:#121826; --line:#1f2937; --text:#e5edf7;
+          --muted:#7c8aa0; --ok:#22c55e; --warn:#f59e0b; --bad:#ef4444; --accent:#38bdf8; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; justify-content:space-between;
+           padding:14px 22px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:16px; margin:0; letter-spacing:.5px; }
+  header .pulse { font-size:12px; color:var(--muted); }
+  .services { display:flex; gap:10px; }
+  .svc { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted);
+         background:var(--panel); border:1px solid var(--line); padding:5px 10px; border-radius:999px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:#555; }
+  .dot.on { background:var(--ok); box-shadow:0 0 8px rgba(34,197,94,.8); }
+  .dot.off { background:var(--bad); }
+  .stats { display:flex; gap:12px; padding:12px 22px; border-bottom:1px solid var(--line); }
+  .stat { flex:1; background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:10px 14px; }
+  .stat .n { font-size:24px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .stat .l { font-size:11px; color:var(--muted); margin-top:2px; }
+  .stat.hot .n { color:var(--warn); }
+  .stat.bad .n { color:var(--bad); }
+  main { display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; padding:14px 22px 22px; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+            overflow:hidden; display:flex; flex-direction:column; max-height:46vh; }
+  section h2 { font-size:12px; margin:0; padding:10px 14px; color:var(--muted);
+               letter-spacing:.1em; border-bottom:1px solid var(--line); }
+  .list { overflow-y:auto; }
+  .row { padding:8px 14px; border-bottom:1px solid rgba(31,41,55,.5); font-size:12px;
+         line-height:1.5; }
+  .row:last-child { border-bottom:0; }
+  .badge { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11px;
+           font-weight:600; margin-right:6px; }
+  .b-red { background:rgba(239,68,68,.15); color:var(--bad); }
+  .b-orange { background:rgba(245,158,11,.15); color:var(--warn); }
+  .b-green { background:rgba(34,197,94,.15); color:var(--ok); }
+  .b-blue { background:rgba(56,189,248,.15); color:var(--accent); }
+  .b-gray { background:rgba(124,138,160,.15); color:var(--muted); }
+  .mono { font-family:ui-monospace,Consolas,monospace; }
+  .muted { color:var(--muted); }
+  .wide { grid-column:1 / -1; max-height:30vh; }
+  .empty { padding:16px; color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sentinel 运维控制台 <span class="muted" style="font-size:12px;font-weight:400">Router → Workers 实时分派</span></h1>
+  <div class="services" id="services"></div>
+</header>
+
+<div class="stats">
+  <div class="stat" id="s-alert"><div class="n">–</div><div class="l">活跃告警 / 进行中事件</div></div>
+  <div class="stat" id="s-inst"><div class="n">–</div><div class="l">待人工确认 PR</div></div>
+  <div class="stat" id="s-queue"><div class="n">–</div><div class="l">任务队列 / 执行中</div></div>
+  <div class="stat" id="s-role"><div class="n" style="font-size:14px">–</div><div class="l">Worker 角色负载（ops/diag/fix）</div></div>
+</div>
+
+<main>
+  <section><h2>告警流</h2><div class="list" id="alerts"><div class="empty">暂无</div></div></section>
+  <section><h2>事件流（状态机）</h2><div class="list" id="incidents"><div class="empty">暂无</div></div></section>
+  <section><h2>任务分派（Router → Worker）</h2><div class="list" id="tasks"><div class="empty">暂无</div></div></section>
+  <section class="wide"><h2>审计流（action_log）</h2><div class="list" id="actions"><div class="empty">暂无</div></div></section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+const SEV = {critical:'b-red', warning:'b-orange', info:'b-blue'};
+const STATE = {open:'b-gray', diagnosing:'b-blue', acting:'b-orange', verifying:'b-blue',
+               awaiting_human:'b-orange', resolved:'b-green', escalated:'b-red'};
+const TSTAT = {queued:'b-gray', running:'b-orange', succeeded:'b-green', failed:'b-red', cancelled:'b-gray'};
+const ROLE = {ops:'⚙️', diag:'🔎', fix:'🔧'};
+
+function badge(cls, text) { return `<span class="badge ${cls}">${esc(text)}</span>`; }
+function time(s) { return s ? s.slice(11, 19) : ''; }
+
+async function refresh() {
+  try {
+    const [ov, al, inc, tk, ac] = await Promise.all([
+      fetch('/api/overview').then(r => r.json()),
+      fetch('/api/alerts').then(r => r.json()),
+      fetch('/api/incidents').then(r => r.json()),
+      fetch('/api/tasks').then(r => r.json()),
+      fetch('/api/actions').then(r => r.json()),
+    ]);
+    renderServices(ov.services);
+    $('s-alert').querySelector('.n').textContent =
+      `${ov.counts.firing_alerts} / ${ov.counts.open_incidents}`;
+    $('s-inst').querySelector('.n').textContent = ov.counts.awaiting_human;
+    $('s-queue').querySelector('.n').textContent =
+      `${ov.counts.queued_tasks} / ${ov.counts.running_tasks}`;
+    $('s-role').querySelector('.n').textContent = ov.worker_roles
+      .map(w => `${ROLE[w.type] || ''}${w.type}:${w.total}`).join('  ') || '–';
+
+    $('alerts').innerHTML = al.alerts.map(a => `<div class="row">
+      ${badge(SEV[a.severity] || 'b-gray', a.severity)}
+      <span class="mono muted">#${a.id}</span> ${esc(a.source)} · ${esc(a.subject)}
+      · ${esc(a.error_class || '-')}
+      ${a.count > 1 ? `· <b>x${a.count}</b>` : ''}
+      ${a.status === 'resolved' ? badge('b-green', '已恢复') : badge('b-red', 'firing')}
+      <span class="muted">${time(a.first_seen_at)}</span></div>`).join('') ||
+      '<div class="empty">暂无告警</div>';
+
+    $('incidents').innerHTML = inc.incidents.map(i => `<div class="row">
+      ${badge(STATE[i.state] || 'b-gray', i.state)}
+      <span class="mono muted">#${i.id}</span> ${esc(i.title || '')}
+      <span class="muted">${time(i.created_at)}</span>
+      ${i.escalation_reason ? `<div class="muted">↳ ${esc(i.escalation_reason)}</div>` : ''}
+      </div>`).join('') || '<div class="empty">暂无事件</div>';
+
+    $('tasks').innerHTML = tk.tasks.map(t => `<div class="row">
+      ${badge(TSTAT[t.status] || 'b-gray', t.status)}
+      <b>${ROLE[t.type] || ''}${esc(t.type)}</b>
+      <span class="mono muted">#${t.id}</span> inc#${t.incident_id}
+      ${t.worker_id ? `<span class="muted mono">→ ${esc(t.worker_id.split('-').slice(-2).join('-'))}</span>` : ''}
+      ${t.attempts > 1 ? `· 第${t.attempts}次` : ''}
+      <span class="muted">${time(t.updated_at)}</span></div>`).join('') ||
+      '<div class="empty">暂无任务</div>';
+
+    $('actions').innerHTML = ac.actions.map(a => `<div class="row">
+      ${badge('b-blue', esc(a.action))}
+      <span class="muted">inc#${a.incident_id ?? '-'} · task#${a.task_id ?? '-'} · ${esc(a.operator)}</span>
+      <span class="mono muted">${esc(a.detail_preview || '')}</span>
+      <span class="muted">${time(a.created_at)}</span></div>`).join('') ||
+      '<div class="empty">暂无审计</div>';
+
+    $('s-alert').className = 'stat' + (ov.counts.firing_alerts > 0 ? ' bad' : '');
+    $('s-queue').className = 'stat' + (ov.counts.queued_tasks > 0 ? ' hot' : '');
+  } catch (e) {
+    $('services').innerHTML = '<span class="muted">控制台连接中断（Router 重启中？）</span>';
+  }
+}
+
+function renderServices(services) {
+  const names = {'aiops-router':'Router','aiops-monitor':'Monitor','aiops-worker':'Worker','demo-app':'Demo App'};
+  $('services').innerHTML = Object.entries(services).map(([k, v]) =>
+    `<span class="svc"><span class="dot ${v === 'active' ? 'on' : 'off'}"></span>${names[k] || k}</span>`
+  ).join('');
+}
+
+setInterval(refresh, 2000); refresh();
+</script>
+</body>
+</html>

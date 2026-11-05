@@ -45,6 +45,15 @@ class MonitorConfig:
 
 
 @dataclass
+class DashboardConfig:
+    """dashboard 段：只读运维控制台（演示用，0.0.0.0:18080）。"""
+
+    enabled: bool = True
+    host: str = "0.0.0.0"
+    port: int = 18080
+
+
+@dataclass
 class LlmConfig:
     """llm 段（阶段 4 生效）。"""
 
@@ -76,6 +85,7 @@ class AppConfig:
     router: RouterConfig = field(default_factory=RouterConfig)
     alert: AlertConfig = field(default_factory=AlertConfig)
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     llm: LlmConfig = field(default_factory=LlmConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     feishu: FeishuConfig = field(default_factory=FeishuConfig)
@@ -114,6 +124,7 @@ def load_config(path: str | None = None) -> AppConfig:
         router=_section(data, "router", RouterConfig),
         alert=_section(data, "alert", AlertConfig),
         monitor=_section(data, "monitor", MonitorConfig),
+        dashboard=_section(data, "dashboard", DashboardConfig),
         llm=_section(data, "llm", LlmConfig),
         worker=_section(data, "worker", WorkerConfig),
         feishu=_section(data, "feishu", FeishuConfig),
