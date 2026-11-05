@@ -5,9 +5,9 @@
 <title>Sentinel Demo Store</title>
 <style>
   :root { --bg:#0f1420; --card:#171e2e; --line:#26304a; --text:#e6ebf5;
-          --muted:#8b96ad; --ok:#22c55e; --bad:#ef4444; --accent:#3b82f6; }
+          --muted:#8b96ad; --ok:#22c55e; --bad:#ef4444; --warn:#f59e0b; --accent:#3b82f6; }
   * { box-sizing: border-box; }
-  body { margin:0; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  body { margin:0; font-family:"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
          background:var(--bg); color:var(--text); min-height:100vh; }
   header { display:flex; align-items:center; justify-content:space-between;
            padding:18px 28px; border-bottom:1px solid var(--line); }
@@ -15,16 +15,19 @@
   #online { font-size:13px; padding:4px 12px; border-radius:999px; background:#333; }
   #online.up { background:rgba(34,197,94,.15); color:var(--ok); border:1px solid rgba(34,197,94,.4); }
   #online.down { background:rgba(239,68,68,.15); color:var(--bad); border:1px solid rgba(239,68,68,.4); }
-  main { max-width:980px; margin:26px auto; padding:0 20px; display:grid;
-         grid-template-columns: 1fr 1fr; gap:18px; }
+  main { max-width:1100px; margin:26px auto; padding:0 20px; display:grid;
+         grid-template-columns:1fr 1fr; gap:18px; }
   .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; }
   .card h2 { font-size:14px; margin:0 0 14px; color:var(--muted); font-weight:600;
              text-transform:uppercase; letter-spacing:.08em; }
-  .metrics { grid-column: 1 / -1; display:flex; gap:16px; align-items:center; }
+  .metrics { grid-column:1 / -1; display:flex; gap:16px; align-items:center; }
   .metric { text-align:center; flex:1; }
-  .metric .num { font-size:34px; font-weight:700; font-variant-numeric: tabular-nums; }
+  .metric .num { font-size:32px; font-weight:700; font-variant-numeric:tabular-nums; }
   .metric .label { font-size:12px; color:var(--muted); margin-top:2px; }
-  .qps.hot { color:#f59e0b; }
+  .qps.hot { color:var(--warn); }
+  #limitBadge { font-size:13px; padding:4px 12px; border-radius:999px;
+                background:rgba(34,197,94,.12); color:var(--ok); }
+  #limitBadge.limited { background:rgba(245,158,11,.15); color:var(--warn); }
   label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
   input { width:100%; padding:10px 12px; border-radius:9px; border:1px solid var(--line);
           background:#0c111b; color:var(--text); font-size:14px; }
@@ -39,6 +42,15 @@
   code { background:#0c111b; border:1px solid var(--line); padding:1px 5px; border-radius:5px; }
   .search-result { font-size:13px; padding:7px 10px; border-bottom:1px solid var(--line); }
   .search-result:last-child { border-bottom:0; }
+  .orders { grid-column:1 / -1; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; color:var(--muted); font-size:11px; font-weight:600;
+       letter-spacing:.06em; padding:8px 10px; border-bottom:1px solid var(--line); }
+  td { padding:8px 10px; border-bottom:1px solid rgba(38,48,74,.55);
+       font-variant-numeric:tabular-nums; }
+  tr:last-child td { border-bottom:0; }
+  .total { color:var(--ok); font-weight:600; }
+  .empty { color:var(--muted); font-size:12px; padding:12px 10px; }
 </style>
 </head>
 <body>
@@ -52,6 +64,7 @@
     <div class="metric"><div class="num" id="qps">–</div><div class="label">QPS（10s 滑窗）</div></div>
     <div class="metric"><div class="num" id="bugMode" style="font-size:20px">–</div><div class="label">BUG_MODE</div></div>
     <div class="metric"><div class="num" id="latency" style="font-size:20px">–</div><div class="label">接口延迟</div></div>
+    <div class="metric"><span id="limitBadge">正常</span><div class="label">防护状态（限流/封禁）</div></div>
   </section>
 
   <section class="card">
@@ -75,25 +88,56 @@
     <button onclick="search()">搜索</button>
     <div id="searchOut" class="hint">输入关键词搜索结果。</div>
   </section>
+
+  <section class="card orders">
+    <h2>最近订单（近 50 笔）</h2>
+    <table>
+      <thead><tr><th>时间</th><th>订单号</th><th>商品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead>
+      <tbody id="orderList"><tr><td colspan="6" class="empty">暂无订单</td></tr></tbody>
+    </table>
+  </section>
 </main>
 
 <script>
 const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 async function refresh() {
   const t0 = performance.now();
   try {
-    const health = await fetch('/health', { cache: 'no-store' });
-    const metrics = await fetch('/metrics', { cache: 'no-store' });
-    const h = await health.json();
-    const m = await metrics.json();
+    const [health, metrics, orders] = await Promise.all([
+      fetch('/health', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/metrics', { cache: 'no-store' }).then(r => r.json()),
+      fetch('/api/orders', { cache: 'no-store' }).then(r => r.json()),
+    ]);
     const ms = Math.round(performance.now() - t0);
     $('online').className = 'up';
     $('online').textContent = '在线';
-    $('bugMode').textContent = h.bug_mode;
-    $('qps').textContent = m.qps.toFixed(1);
-    $('qps').className = 'num' + (m.qps > 50 ? ' qps hot' : '');
+    $('bugMode').textContent = health.bug_mode;
+    $('qps').textContent = metrics.qps.toFixed(1);
+    $('qps').className = 'num' + (metrics.qps > 50 ? ' qps hot' : '');
     $('latency').textContent = ms + ' ms';
+    const lim = metrics.limits || {};
+    const blocked = Object.keys(lim.blocked_ips || {}).length;
+    if (lim.rate_limit) {
+      $('limitBadge').className = 'limited';
+      $('limitBadge').textContent = `限流 ${lim.rate_limit.qps} QPS（${Math.round(lim.rate_limit.expires_in)}s 后解除）`;
+    } else if (blocked > 0) {
+      $('limitBadge').className = 'limited';
+      $('limitBadge').textContent = `封禁 ${blocked} 个 IP`;
+    } else {
+      $('limitBadge').className = '';
+      $('limitBadge').textContent = '正常';
+    }
+    const rows = (orders.orders || []).slice().reverse();
+    $('orderList').innerHTML = rows.length ? rows.map(o => `<tr>
+      <td>${esc((o.ts || '').slice(11, 19))}</td>
+      <td class="mono">${esc(o.order_id)}</td>
+      <td>${esc(o.item)}</td>
+      <td>${esc(o.amount)}</td>
+      <td>${esc(o.price)}</td>
+      <td class="total">¥${esc(o.total)}</td>
+    </tr>`).join('') : '<tr><td colspan="6" class="empty">暂无订单</td></tr>';
   } catch (e) {
     $('online').className = 'down';
     $('online').textContent = '离线（连接失败）';
@@ -114,6 +158,7 @@ async function createOrder() {
     });
     const text = await resp.text();
     $('orderOut').textContent = `HTTP ${resp.status}\n${text}`;
+    refresh();
   } catch (e) {
     $('orderOut').textContent = '网络错误: ' + e;
   }

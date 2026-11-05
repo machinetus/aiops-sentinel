@@ -22,6 +22,13 @@ monitor:
   # 感知面上报地址（env AIOPS_ROUTER_URL 可覆盖）
   router_url: "http://127.0.0.1:18081"
 
+dashboard:
+  # 只读运维控制台（演示用，宿主机浏览器访问 http://<VM-IP>:18080/）
+  # 仅读数据库与 systemctl is-active，不产生任何副作用；生产可改绑 127.0.0.1 或加认证
+  enabled: true
+  host: "0.0.0.0"
+  port: 18080
+
 # LLM（阶段 4 启用；OpenAI 兼容，可换 GLM / DeepSeek / 本地模型）
 llm:
   enabled: false
