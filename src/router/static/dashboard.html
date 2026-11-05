@@ -79,7 +79,11 @@ const TSTAT = {queued:'b-gray', running:'b-orange', succeeded:'b-green', failed:
 const ROLE = {ops:'⚙️', diag:'🔎', fix:'🔧'};
 
 function badge(cls, text) { return `<span class="badge ${cls}">${esc(text)}</span>`; }
-function time(s) { return s ? s.slice(11, 19) : ''; }
+function time(s) {
+  if (!s) return '';
+  try { return new Date(s).toLocaleTimeString('zh-CN', { hour12: false }); }
+  catch (e) { return String(s).slice(11, 19); }
+}
 
 async function refresh() {
   try {
