@@ -16,6 +16,15 @@ def test_health_ok():
         assert body["service"] == "demo-app"
 
 
+def test_index_page_served():
+    """业务前端单页可访问（状态条 + 下单 + 搜索）。"""
+    with TestClient(app) as client:
+        r = client.get("/")
+        assert r.status_code == 200
+        assert "Sentinel Demo Store" in r.text
+        assert "amount" in r.text
+
+
 def test_metrics_has_qps():
     with TestClient(app) as client:
         client.get("/health")

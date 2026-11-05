@@ -15,16 +15,19 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from .admin import admin_app
 from .limits import registry
 from .orders import bug_mode, create_order
 
 logger = logging.getLogger("demo_app")
+
+_STATIC_DIR = Path(__file__).parent / "static"
 
 
 class JsonFormatter(logging.Formatter):
@@ -104,6 +107,12 @@ async def metrics_limits_logging(request: Request, call_next):
         "status": response.status_code, "client_ip": client_ip,
         "ms": round((time.perf_counter() - start) * 1000, 1)})
     return response
+
+
+@app.get("/", include_in_schema=False)
+async def index_page() -> FileResponse:
+    """业务前端单页（状态条 + 下单 + 搜索；演示时浏览器直连 :18000）。"""
+    return FileResponse(_STATIC_DIR / "index.html")
 
 
 @app.get("/health")

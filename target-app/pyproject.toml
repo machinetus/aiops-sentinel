@@ -18,3 +18,6 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["demo_app*"]
+
+[tool.setuptools.package-data]
+demo_app = ["static/*"]
