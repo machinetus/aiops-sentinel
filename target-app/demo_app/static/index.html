@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Sentinel Demo Store</title>
+<style>
+  :root { --bg:#0f1420; --card:#171e2e; --line:#26304a; --text:#e6ebf5;
+          --muted:#8b96ad; --ok:#22c55e; --bad:#ef4444; --accent:#3b82f6; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+         background:var(--bg); color:var(--text); min-height:100vh; }
+  header { display:flex; align-items:center; justify-content:space-between;
+           padding:18px 28px; border-bottom:1px solid var(--line); }
+  header h1 { font-size:18px; margin:0; letter-spacing:.5px; }
+  #online { font-size:13px; padding:4px 12px; border-radius:999px; background:#333; }
+  #online.up { background:rgba(34,197,94,.15); color:var(--ok); border:1px solid rgba(34,197,94,.4); }
+  #online.down { background:rgba(239,68,68,.15); color:var(--bad); border:1px solid rgba(239,68,68,.4); }
+  main { max-width:980px; margin:26px auto; padding:0 20px; display:grid;
+         grid-template-columns: 1fr 1fr; gap:18px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:20px; }
+  .card h2 { font-size:14px; margin:0 0 14px; color:var(--muted); font-weight:600;
+             text-transform:uppercase; letter-spacing:.08em; }
+  .metrics { grid-column: 1 / -1; display:flex; gap:16px; align-items:center; }
+  .metric { text-align:center; flex:1; }
+  .metric .num { font-size:34px; font-weight:700; font-variant-numeric: tabular-nums; }
+  .metric .label { font-size:12px; color:var(--muted); margin-top:2px; }
+  .qps.hot { color:#f59e0b; }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+  input { width:100%; padding:10px 12px; border-radius:9px; border:1px solid var(--line);
+          background:#0c111b; color:var(--text); font-size:14px; }
+  input:focus { outline:none; border-color:var(--accent); }
+  button { margin-top:14px; width:100%; padding:11px; border:0; border-radius:9px;
+           background:var(--accent); color:#fff; font-size:14px; font-weight:600; cursor:pointer; }
+  button:hover { filter:brightness(1.12); }
+  pre { background:#0c111b; border:1px solid var(--line); border-radius:9px; padding:12px;
+        font-size:12px; line-height:1.55; overflow:auto; max-height:200px; margin:14px 0 0;
+        white-space:pre-wrap; word-break:break-all; }
+  .hint { font-size:12px; color:var(--muted); margin-top:10px; line-height:1.6; }
+  code { background:#0c111b; border:1px solid var(--line); padding:1px 5px; border-radius:5px; }
+  .search-result { font-size:13px; padding:7px 10px; border-bottom:1px solid var(--line); }
+  .search-result:last-child { border-bottom:0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Sentinel Demo Store</h1>
+  <span id="online">检测中…</span>
+</header>
+
+<main>
+  <section class="card metrics">
+    <div class="metric"><div class="num" id="qps">–</div><div class="label">QPS（10s 滑窗）</div></div>
+    <div class="metric"><div class="num" id="bugMode" style="font-size:20px">–</div><div class="label">BUG_MODE</div></div>
+    <div class="metric"><div class="num" id="latency" style="font-size:20px">–</div><div class="label">接口延迟</div></div>
+  </section>
+
+  <section class="card">
+    <h2>下单</h2>
+    <label>商品名 item</label>
+    <input id="item" value="sku-1">
+    <label>数量 amount（试试输入 abc —— 会触发代码缺陷）</label>
+    <input id="amount" value="3">
+    <label>单价 price</label>
+    <input id="price" value="2">
+    <button onclick="createOrder()">提交订单</button>
+    <pre id="orderOut">等待请求…</pre>
+    <div class="hint">正常：amount 填数字 → 返回订单总额。
+      <code>BUG_MODE=type_bug</code> 时填 <code>abc</code> 会 500，触发告警 → LLM 根因 → 修复 PR。</div>
+  </section>
+
+  <section class="card">
+    <h2>搜索</h2>
+    <label>关键词 q</label>
+    <input id="q" value="ops">
+    <button onclick="search()">搜索</button>
+    <div id="searchOut" class="hint">输入关键词搜索结果。</div>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+async function refresh() {
+  const t0 = performance.now();
+  try {
+    const health = await fetch('/health', { cache: 'no-store' });
+    const metrics = await fetch('/metrics', { cache: 'no-store' });
+    const h = await health.json();
+    const m = await metrics.json();
+    const ms = Math.round(performance.now() - t0);
+    $('online').className = 'up';
+    $('online').textContent = '在线';
+    $('bugMode').textContent = h.bug_mode;
+    $('qps').textContent = m.qps.toFixed(1);
+    $('qps').className = 'num' + (m.qps > 50 ? ' qps hot' : '');
+    $('latency').textContent = ms + ' ms';
+  } catch (e) {
+    $('online').className = 'down';
+    $('online').textContent = '离线（连接失败）';
+    $('qps').textContent = '–';
+  }
+}
+setInterval(refresh, 2000); refresh();
+
+async function createOrder() {
+  const amountRaw = $('amount').value.trim();
+  const amount = /^\d+$/.test(amountRaw) ? Number(amountRaw) : amountRaw;
+  const body = { item: $('item').value, amount: amount, price: Number($('price').value || 1) };
+  $('orderOut').textContent = '请求中…';
+  try {
+    const resp = await fetch('/api/orders', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const text = await resp.text();
+    $('orderOut').textContent = `HTTP ${resp.status}\n${text}`;
+  } catch (e) {
+    $('orderOut').textContent = '网络错误: ' + e;
+  }
+}
+
+async function search() {
+  const q = encodeURIComponent($('q').value || '');
+  try {
+    const resp = await fetch('/api/search?q=' + q);
+    const data = await resp.json();
+    $('searchOut').innerHTML = (data.results || [])
+      .map(r => `<div class="search-result">#${r.id} ${r.title}</div>`).join('');
+  } catch (e) {
+    $('searchOut').textContent = '搜索失败: ' + e;
+  }
+}
+</script>
+</body>
+</html>
