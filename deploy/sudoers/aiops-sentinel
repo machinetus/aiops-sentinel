@@ -10,10 +10,13 @@
 #   - 命令必须是绝对路径 + 固定参数的「逐字精确匹配」，严禁通配符（*）
 #   - aiops 用户只能免密执行下面这一条写操作，其余一切 sudo 请求被拒绝并留审计
 #
-# 为什么只有一条？
-#   - restart 是唯一的写操作，必须提权；
-#   - systemctl is-active / status 等查询类命令是只读的，普通用户本来就能执行，
-#     无需也不应放进 sudoers（白名单越小越安全）。
+# 为什么是这三条？
+#   - restart：OpsWorker 自愈动作（唯一的生产写操作）；
+#   - stop / kill --signal=SIGKILL：仅用于【演示控制台】注入"宕机"场景
+#     （/demo/ 页面触发；chaos_kill.sh 同款语义）。注意：sudoers 只是 OS 层，
+#     真正的白名单门是 actions.yaml + 执行器运行时校验——stop/kill 没有
+#     定义为 Worker 动作，OpsWorker 依旧无法执行它们；
+#   - systemctl is-active / status 等查询类只读命令无需 sudo，不入清单。
 #
 # 安全验证（阶段 7 负测试）：
 #   sudo -u aiops sudo systemctl restart demo-app.service   # 应成功
@@ -21,3 +24,5 @@
 # ============================================================================
 
 aiops ALL=(root) NOPASSWD: /usr/bin/systemctl restart demo-app.service
+aiops ALL=(root) NOPASSWD: /usr/bin/systemctl stop demo-app.service
+aiops ALL=(root) NOPASSWD: /usr/bin/systemctl kill --signal=SIGKILL demo-app.service

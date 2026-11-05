@@ -67,8 +67,9 @@ async def lifespan(_: FastAPI):
     app.state.feishu = get_sender(config.feishu.enabled)
     watch_task = asyncio.create_task(_pr_watch_loop())  # 阶段 5：PR 合并轮询
     # 只读运维控制台（演示用；仅读 DB，不写不执行副作用）
+    # AIOPS_DASHBOARD=0 可禁用（单测/多实例场景避免端口冲突）
     dash_server = None
-    if config.dashboard.enabled:
+    if config.dashboard.enabled and os.environ.get("AIOPS_DASHBOARD") != "0":
         dash_server = uvicorn.Server(uvicorn.Config(
             dashboard_app, host=config.dashboard.host, port=config.dashboard.port,
             log_level="warning", access_log=False))
