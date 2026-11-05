@@ -34,6 +34,10 @@ def create_order(body: dict) -> dict:
     # 无论 BUG_MODE 如何，入参校验必须在业务计算之前完成：
     # 非整数（含字符串 "abc"、布尔值、None）一律 400，避免 int()/乘法抛 ValueError 变成 500。
     if isinstance(amount, bool) or not isinstance(amount, int):
+        logger.warning(
+            "invalid amount type",
+            extra={"event": "invalid_amount", "amount_type": type(amount).__name__},
+        )
         raise HTTPException(status_code=400, detail="amount must be an integer")
     try:
         total = amount * price

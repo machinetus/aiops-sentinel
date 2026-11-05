@@ -33,9 +33,20 @@ def test_off_mode_string_amount_rejected(monkeypatch):
 
 
 def test_endpoint_rejects_invalid_amount(monkeypatch):
-    """端到端：非法 amount 在 type_bug / off 模式下均返回 400。"""
+    """端到端：触发样本在 type_bug / off 模式下均返回 400，而非 500。"""
     for mode in ("type_bug", "off"):
         monkeypatch.setenv("BUG_MODE", mode)
         with TestClient(app, raise_server_exceptions=False) as client:
-            assert client.post("/api/orders",
-                               json={"item": "x", "amount": "abc", "price": 2}).status_code == 400
+            resp = client.post("/api/orders",
+                               json={"item": "x", "amount": "abc", "price": 2})
+            assert resp.status_code == 400
+            assert resp.json()["detail"] == "amount must be an integer"
+
+
+def test_endpoint_rejects_bool_amount(monkeypatch):
+    """bool 是 int 子类，但不应被当作合法 amount。"""
+    monkeypatch.setenv("BUG_MODE", "type_bug")
+    with TestClient(app, raise_server_exceptions=False) as client:
+        resp = client.post("/api/orders",
+                           json={"item": "x", "amount": True, "price": 2})
+        assert resp.status_code == 400
